@@ -223,11 +223,6 @@ export default function CATDemo() {
 
         {/* Header */}
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="text-white text-xs font-semibold px-2.5 py-1 rounded-full tracking-widest uppercase" style={{ background: TEAL }}>
-              Research Demo
-            </span>
-          </div>
           <h1 className="text-3xl font-bold tracking-tight text-gray-900 mb-1">
             CAT: Conditional Attribute Transformers
           </h1>
