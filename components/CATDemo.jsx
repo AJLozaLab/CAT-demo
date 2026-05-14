@@ -149,6 +149,10 @@ export default function CATDemo() {
     hasSteps && (live || (introStage === 'prefix' && playPaused))
 
   const fixedPrompt = useMemo(() => getFixedSteerPromptDisplay(steps), [steps])
+  const { fixedPromptTrimmed, fixedPromptTrailing } = useMemo(() => {
+    const trimmed = fixedPrompt.trimEnd()
+    return { fixedPromptTrimmed: trimmed, fixedPromptTrailing: fixedPrompt.slice(trimmed.length) }
+  }, [fixedPrompt])
 
   const stepsRef = useRef(steps)
   stepsRef.current = steps
@@ -526,14 +530,18 @@ export default function CATDemo() {
         <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
           <div className="text-xs text-gray-900 uppercase tracking-widest mb-3 font-semibold">Generated text</div>
           <div className="text-lg leading-relaxed font-mono min-h-10 text-gray-900">
-            <span className="inline-block rounded-md bg-gray-100 px-2 py-0.5 text-gray-600 ring-1 ring-gray-200/80">
-              {fixedPrompt}
+            <span className="inline rounded-md bg-gray-100 px-1.5 py-0 text-gray-600 ring-1 ring-gray-200/80 align-baseline leading-snug">
+              {fixedPromptTrimmed}
             </span>
+            {fixedPromptTrailing}
             {playCommittedText ? <ContextText context={playCommittedText} /> : null}
             {live && step && (
               <>
                 {livePriorText ? <ContextText context={livePriorText} /> : null}
-                <span style={{ background: STAR5_SOFT, color: '#3d5cad', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>
+                <span
+                  className="inline rounded px-1.5 py-0 font-semibold leading-snug align-baseline"
+                  style={{ background: STAR5_SOFT, color: '#3d5cad' }}
+                >
                   {renderSpecial(step.chosen_token_display)}
                 </span>
               </>
