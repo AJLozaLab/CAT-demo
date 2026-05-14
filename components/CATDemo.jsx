@@ -1,12 +1,17 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { STEPS_5STAR, STEPS_1STAR } from '@/lib/steps-data'
+import { STEPS_5STAR, STEPS_1STAR, getFixedSteerPromptDisplay } from '@/lib/steps-data'
 
-// ── Brand colors ──────────────────────────────────────────────────────────────
-const TEAL   = '#6ac6ac'
+// ── Brand colors (5★ vs 1★) ───────────────────────────────────────────────────
+const STAR5 = '#648FFF'
+const STAR1 = '#D95B5D'
 const YELLOW = '#ffdb9c'
-const BLUE   = '#b6cbff'
+
+const STAR5_SOFT = 'rgba(100, 143, 255, 0.14)'
+const STAR1_SOFT = 'rgba(217, 91, 93, 0.14)'
+const STAR5_BORDER = '#4a72d9'
+const STAR1_BORDER = '#b84a4c'
 
 /** Optional: set `NEXT_PUBLIC_ARXIV_URL` in `.env.local` when the paper is live. */
 const ARXIV_PAPER_URL =
@@ -14,11 +19,11 @@ const ARXIV_PAPER_URL =
     ? process.env.NEXT_PUBLIC_ARXIV_URL.trim()
     : ''
 
-const PREFIX_WORDS = ['[sos]', 'I', 'really']
-const PREFIX_GREY = '#9ca3af'
 const ATTR_THRESHOLD = '0.8'
 const TOKEN_EPSILON = '0.001'
-const PREFIX_WORD_MS = 420
+
+/** Default ms between each new chosen token during Play (editable next to Play). */
+const DEFAULT_TOKEN_REVEAL_MS = 1000
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtPct(n) {
@@ -40,11 +45,11 @@ function cellBg(t, hex) {
 function SpecialTokenBadge({ token }) {
   const t = token.trim()
   if (t === '<|sor|>')  return <span className="token-badge" style={{ background: '#e8f7f2', color: '#3a9e88', border: '1px solid #b8e6d9' }}>⏎ END-OF-REVIEW</span>
-  if (t === '<|*_5|>')  return <span className="token-badge" style={{ background: '#fff8e8', color: '#b87a00', border: '1px solid #ffdb9c' }}>★★★★★ 5-STAR</span>
+  if (t === '<|*_5|>')  return <span className="token-badge" style={{ background: '#e8eeff', color: '#3d5cad', border: '1px solid #c8d9ff' }}>★★★★★ 5-STAR</span>
   if (t === '<|*_4|>')  return <span className="token-badge" style={{ background: '#fff8e8', color: '#b87a00', border: '1px solid #ffdb9c' }}>★★★★☆ 4-STAR</span>
   if (t === '<|*_3|>')  return <span className="token-badge" style={{ background: '#f3f4f6', color: '#6b7280', border: '1px solid #d1d5db' }}>★★★☆☆ 3-STAR</span>
   if (t === '<|*_2|>')  return <span className="token-badge" style={{ background: '#f3f0ff', color: '#7c6ca8', border: '1px solid #c4b5fd' }}>★★☆☆☆ 2-STAR</span>
-  if (t === '<|*_1|>')  return <span className="token-badge" style={{ background: '#eef3ff', color: '#4a6ecc', border: '1px solid #b6cbff' }}>★☆☆☆☆ 1-STAR</span>
+  if (t === '<|*_1|>')  return <span className="token-badge" style={{ background: '#fceaea', color: '#a33436', border: '1px solid #f0b4b5' }}>★☆☆☆☆ 1-STAR</span>
   if (t === '<|*_0|>')  return <span className="token-badge" style={{ background: '#f3f4f6', color: '#9ca3af', border: '1px solid #e5e7eb' }}>☆ 0-STAR</span>
   return null
 }
@@ -75,18 +80,48 @@ function chartLabelsForSteps(steps) {
   )
 }
 
+/** Concatenate `chosen_token_display` for the first `count` steps (decode after the fixed steering prompt). */
+function committedChosenDisplay(steps, count) {
+  if (!steps?.length || count <= 0) return ''
+  return steps.slice(0, count).map(s => s.chosen_token_display).join('')
+}
+
+function applyChartStep(chart, stepList, idx, visibleCount) {
+  const n = Math.min(Math.max(0, visibleCount), stepList.length)
+  if (n === 0) return
+  const hi = Math.min(Math.max(0, idx), n - 1)
+  const star5 = Array(n).fill(null)
+  const star1 = Array(n).fill(null)
+  for (let i = 0; i <= hi; i++) {
+    star5[i] = stepList[i].chosen_star5
+    star1[i] = stepList[i].chosen_star1
+  }
+  chart.data.labels = chartLabelsForSteps(stepList).slice(0, n)
+  chart.data.datasets[0].data = star5
+  chart.data.datasets[1].data = star1
+  chart.data.datasets.forEach(ds => {
+    ds.pointRadius      = Array.from({ length: n }, (_, i) => (i === hi ? 8 : i <= hi ? 4 : 0))
+    ds.pointHoverRadius = Array.from({ length: n }, (_, i) => (i <= hi ? 6 : 0))
+  })
+  chart.update()
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function CATDemo() {
   const [steerTarget, setSteerTarget] = useState('5')
   const [introStage, setIntroStage]   = useState('pre') // 'pre' | 'prefix' | 'live'
-  const [prefixCount, setPrefixCount] = useState(0)
+  const [playTokenCount, setPlayTokenCount] = useState(0)
+  const [playPaused, setPlayPaused] = useState(false)
   const [currentStep, setCurrentStep] = useState(0)
   const [sortCol, setSortCol]         = useState('prob')
   const [sortDir, setSortDir]         = useState('desc')
+  const [tokenRevealMs, setTokenRevealMs] = useState(DEFAULT_TOKEN_REVEAL_MS)
 
   const canvasRef      = useRef(null)
   const chartRef       = useRef(null)
   const prefixTimerRef = useRef(null)
+  const prefixTimeoutsRef = useRef([])
+  const prefixRunIdRef = useRef(0)
 
   const steps = useMemo(
     () => (steerTarget === '5' ? STEPS_5STAR : STEPS_1STAR),
@@ -95,165 +130,290 @@ export default function CATDemo() {
   const hasSteps = steps.length > 0
   const star1Ready = STEPS_1STAR.length > 0
   const live = introStage === 'live' && hasSteps
-  const step = live ? steps[currentStep] : null
+  /** Chart + candidate table: live mode, or Play animation once at least one token is visible. */
+  const vizActive =
+    hasSteps && (live || (introStage === 'prefix' && playTokenCount > 0))
+  const vizStepIndex = live
+    ? currentStep
+    : introStage === 'prefix'
+      ? Math.max(0, playTokenCount - 1)
+      : 0
+  const step = vizActive ? steps[vizStepIndex] : null
+
+  /** How many decode steps are reflected in generated text (x-axis grows with them). */
+  const chartVisibleCount = useMemo(() => {
+    if (!vizActive || !hasSteps) return 0
+    if (live) return Math.min(steps.length, currentStep + 1)
+    return Math.min(steps.length, playTokenCount)
+  }, [vizActive, hasSteps, live, steps.length, currentStep, playTokenCount])
+
+  /** Back / Next (and arrow keys): live walkthrough, or paused Play to step by token count. */
+  const manualScrub =
+    hasSteps && (live || (introStage === 'prefix' && playPaused))
+
+  const fixedPrompt = useMemo(() => getFixedSteerPromptDisplay(steps), [steps])
+
+  const stepsRef = useRef(steps)
+  stepsRef.current = steps
+  const playTokenCountRef = useRef(0)
+  playTokenCountRef.current = playTokenCount
 
   const resetIntro = useCallback(() => {
+    prefixRunIdRef.current += 1
     if (prefixTimerRef.current) {
       clearInterval(prefixTimerRef.current)
       prefixTimerRef.current = null
     }
+    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
+    prefixTimeoutsRef.current = []
     setIntroStage('pre')
-    setPrefixCount(0)
+    setPlayTokenCount(0)
+    setPlayPaused(false)
     setCurrentStep(0)
   }, [])
 
   const onSteerChange = next => {
-    if (next === '1' && !star1Ready) return
     setSteerTarget(next)
     resetIntro()
   }
 
-  // ── Init / rebuild Chart.js when trace set changes ─────────────────────────
+  // ── Chart.js during Play (per revealed token) and in live walkthrough ───
   useEffect(() => {
-    if (!hasSteps) {
+    if (!vizActive || !hasSteps || chartVisibleCount <= 0) {
       chartRef.current?.destroy()
       chartRef.current = null
       return
     }
+    const vc = chartVisibleCount
+    const idx = vizStepIndex
     let chart
-    const labels = chartLabelsForSteps(steps)
+    const labels = chartLabelsForSteps(steps).slice(0, vc)
     import('chart.js/auto').then(({ Chart }) => {
       if (!canvasRef.current) return
       chartRef.current?.destroy()
       chartRef.current = null
-      chart = new Chart(canvasRef.current, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [
-            {
-              label: '5★ prob',
-              data: Array(steps.length).fill(null),
-              borderColor: TEAL,
-              backgroundColor: 'rgba(106,198,172,0.12)',
-              pointBackgroundColor: TEAL,
-              pointBorderColor: '#fff',
-              pointBorderWidth: 1.5,
-              pointRadius: 5,
-              pointHoverRadius: 7,
-              tension: 0.3,
-              fill: false,
-              borderWidth: 2.5,
+      try {
+        chart = new Chart(canvasRef.current, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              {
+                label: '5★ prob',
+                data: Array(vc).fill(null),
+                borderColor: STAR5,
+                backgroundColor: STAR5_SOFT,
+                pointBackgroundColor: STAR5,
+                pointBorderColor: '#fff',
+                pointBorderWidth: 1.5,
+                pointRadius: 5,
+                pointHoverRadius: 7,
+                tension: 0.3,
+                fill: false,
+                borderWidth: 2.5,
+              },
+              {
+                label: '1★ prob',
+                data: Array(vc).fill(null),
+                borderColor: STAR1,
+                backgroundColor: STAR1_SOFT,
+                pointBackgroundColor: STAR1,
+                pointBorderColor: '#fff',
+                pointBorderWidth: 1.5,
+                pointRadius: 5,
+                pointHoverRadius: 7,
+                tension: 0.3,
+                fill: false,
+                borderWidth: 2.5,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            scales: {
+              x: {
+                ticks: { color: '#9ca3af', maxRotation: 45, font: { family: 'JetBrains Mono, monospace', size: 11 } },
+                grid:  { display: false },
+                border: { color: '#e5e7eb' },
+              },
+              y: {
+                min: 0, max: 1,
+                ticks: { color: '#9ca3af', font: { size: 11 }, callback: v => (v * 100).toFixed(0) + '%' },
+                grid:  { display: false },
+                border: { color: '#e5e7eb' },
+              },
             },
-            {
-              label: '1★ prob',
-              data: Array(steps.length).fill(null),
-              borderColor: BLUE,
-              backgroundColor: 'rgba(182,203,255,0.12)',
-              pointBackgroundColor: BLUE,
-              pointBorderColor: '#fff',
-              pointBorderWidth: 1.5,
-              pointRadius: 5,
-              pointHoverRadius: 7,
-              tension: 0.3,
-              fill: false,
-              borderWidth: 2.5,
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: { duration: 300 },
-          scales: {
-            x: {
-              ticks: { color: '#9ca3af', maxRotation: 45, font: { family: 'JetBrains Mono, monospace', size: 11 } },
-              grid:  { color: 'rgba(0,0,0,0.05)' },
-              border: { color: '#e5e7eb' },
-            },
-            y: {
-              min: 0, max: 1,
-              ticks: { color: '#9ca3af', font: { size: 11 }, callback: v => (v * 100).toFixed(0) + '%' },
-              grid:  { color: 'rgba(0,0,0,0.06)' },
-              border: { color: '#e5e7eb' },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#fff',
+                borderColor: '#e5e7eb',
+                borderWidth: 1,
+                titleColor: '#111827',
+                bodyColor: '#6b7280',
+                callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtPct(ctx.raw)}` },
+              },
             },
           },
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              backgroundColor: '#fff',
-              borderColor: '#e5e7eb',
-              borderWidth: 1,
-              titleColor: '#111827',
-              bodyColor: '#6b7280',
-              callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtPct(ctx.raw)}` },
-            },
-          },
-        },
-      })
-      chartRef.current = chart
+        })
+        chartRef.current = chart
+        applyChartStep(chart, steps, idx, vc)
+      } catch (err) {
+        console.error('Chart init failed', err)
+      }
     })
     return () => {
       chart?.destroy()
       if (chartRef.current === chart) chartRef.current = null
     }
-  }, [steps, hasSteps])
+  }, [vizActive, hasSteps, steps, chartVisibleCount])
 
   // ── Update chart when step changes ─────────────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart || !live) return
-    const star5 = Array(steps.length).fill(null)
-    const star1 = Array(steps.length).fill(null)
-    for (let i = 0; i <= currentStep; i++) {
-      star5[i] = steps[i].chosen_star5
-      star1[i] = steps[i].chosen_star1
-    }
-    chart.data.datasets[0].data = star5
-    chart.data.datasets[1].data = star1
-    chart.data.datasets.forEach(ds => {
-      ds.pointRadius      = Array.from({ length: steps.length }, (_, i) => i === currentStep ? 8 : i <= currentStep ? 4 : 0)
-      ds.pointHoverRadius = Array.from({ length: steps.length }, (_, i) => i <= currentStep ? 6 : 0)
-    })
-    chart.update()
-  }, [currentStep, live, steps])
+    if (!chart || !vizActive || chartVisibleCount <= 0) return
+    applyChartStep(chart, steps, vizStepIndex, chartVisibleCount)
+  }, [vizStepIndex, vizActive, steps, chartVisibleCount])
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = e => {
-      if (!live) return
-      if (e.key === 'ArrowRight') setCurrentStep(s => Math.min(s + 1, steps.length - 1))
-      if (e.key === 'ArrowLeft')  setCurrentStep(s => Math.max(s - 1, 0))
-      if (e.key === 'r' || e.key === 'R') resetIntro()
+      if (e.key === 'r' || e.key === 'R') {
+        resetIntro()
+        return
+      }
+      if (!hasSteps) return
+      if (live) {
+        if (e.key === 'ArrowRight') setCurrentStep(s => Math.min(s + 1, steps.length - 1))
+        if (e.key === 'ArrowLeft') setCurrentStep(s => Math.max(s - 1, 0))
+      } else if (introStage === 'prefix' && playPaused) {
+        if (e.key === 'ArrowRight')
+          setPlayTokenCount(c => Math.min(steps.length, c + 1))
+        if (e.key === 'ArrowLeft') setPlayTokenCount(c => Math.max(0, c - 1))
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [live, steps.length, resetIntro])
+  }, [live, introStage, playPaused, hasSteps, steps.length, resetIntro])
 
-  const playPrefix = () => {
-    if (!hasSteps) return
-    if (prefixTimerRef.current) clearInterval(prefixTimerRef.current)
-    setIntroStage('prefix')
-    setPrefixCount(1)
-    let i = 1
-    prefixTimerRef.current = setInterval(() => {
-      i += 1
-      if (i > PREFIX_WORDS.length) {
-        if (prefixTimerRef.current) clearInterval(prefixTimerRef.current)
-        prefixTimerRef.current = null
+  const pausePlay = useCallback(() => {
+    prefixRunIdRef.current += 1
+    if (prefixTimerRef.current) {
+      clearInterval(prefixTimerRef.current)
+      prefixTimerRef.current = null
+    }
+    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
+    prefixTimeoutsRef.current = []
+    setPlayPaused(true)
+  }, [])
+
+  const resumePlay = useCallback(() => {
+    prefixRunIdRef.current += 1
+    const runId = prefixRunIdRef.current
+    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
+    prefixTimeoutsRef.current = []
+
+    const st = stepsRef.current
+    const n = st.length
+    const ms = Math.max(0, Math.min(5000, Math.round(Number(tokenRevealMs) || 0)))
+    const start = playTokenCountRef.current
+
+    setPlayPaused(false)
+
+    const finishToLive = () => {
+      if (runId !== prefixRunIdRef.current) return
+      setPlayPaused(false)
+      if (hasSteps) {
         setIntroStage('live')
-        setCurrentStep(0)
-        return
+        setCurrentStep(Math.max(0, n - 1))
+        setPlayTokenCount(0)
+      } else {
+        setIntroStage('pre')
       }
-      setPrefixCount(i)
-    }, PREFIX_WORD_MS)
-  }
+    }
+
+    if (start >= n) {
+      finishToLive()
+      return
+    }
+
+    let count = start
+    const revealNext = () => {
+      const tid = setTimeout(() => {
+        if (runId !== prefixRunIdRef.current) return
+        count += 1
+        setPlayTokenCount(count)
+        if (count >= n) {
+          finishToLive()
+          return
+        }
+        revealNext()
+      }, ms)
+      prefixTimeoutsRef.current.push(tid)
+    }
+    revealNext()
+  }, [hasSteps, tokenRevealMs])
+
+  const playPrefix = useCallback(() => {
+    prefixRunIdRef.current += 1
+    const runId = prefixRunIdRef.current
+    if (prefixTimerRef.current) {
+      clearInterval(prefixTimerRef.current)
+      prefixTimerRef.current = null
+    }
+    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
+    prefixTimeoutsRef.current = []
+
+    const st = stepsRef.current
+    const n = st.length
+    const ms = Math.max(0, Math.min(5000, Math.round(Number(tokenRevealMs) || 0)))
+
+    const finishToLive = () => {
+      if (runId !== prefixRunIdRef.current) return
+      setPlayPaused(false)
+      if (hasSteps) {
+        setIntroStage('live')
+        setCurrentStep(Math.max(0, n - 1))
+        setPlayTokenCount(0)
+      } else {
+        setIntroStage('pre')
+      }
+    }
+
+    if (!hasSteps || n === 0) {
+      finishToLive()
+      return
+    }
+
+    setPlayPaused(false)
+    setIntroStage('prefix')
+    setPlayTokenCount(0)
+
+    let count = 0
+    const revealNext = () => {
+      const tid = setTimeout(() => {
+        if (runId !== prefixRunIdRef.current) return
+        count += 1
+        setPlayTokenCount(count)
+        if (count >= n) {
+          finishToLive()
+          return
+        }
+        revealNext()
+      }, ms)
+      prefixTimeoutsRef.current.push(tid)
+    }
+    revealNext()
+  }, [hasSteps, tokenRevealMs])
 
   useEffect(() => () => {
     if (prefixTimerRef.current) clearInterval(prefixTimerRef.current)
+    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
   }, [])
 
-  // ── Table sort (only when live) ────────────────────────────────────────────
+  // ── Table sort (when chart / table are visible) ───────────────────────────
   const { minProb, maxProb, min1, max1, min5, max5 } = useMemo(() => {
     if (!step) {
       return { minProb: 0, maxProb: 1, min1: 0, max1: 1, min5: 0, max5: 1 }
@@ -283,10 +443,15 @@ export default function CATDemo() {
   }
 
   const sortIcon = col => sortCol !== col ? '↕' : sortDir === 'asc' ? '↑' : '↓'
-  const thClass  = col => `px-5 py-3 cursor-pointer select-none transition-colors hover:text-[#4aaa94] ${sortCol === col ? 'text-[#6ac6ac]' : ''}`
+  const thClass  = col => `px-5 py-3 cursor-pointer select-none transition-colors hover:text-[#5278d9] ${sortCol === col ? 'text-[#648FFF]' : ''}`
 
-  const prefixShown = PREFIX_WORDS.slice(0, prefixCount).join(' ')
-  const steerLabel = steerTarget === '5' ? '5★' : '1★'
+  const playCommittedText =
+    introStage === 'prefix' ? committedChosenDisplay(steps, playTokenCount) : ''
+  const livePriorText = live && step ? committedChosenDisplay(steps, currentStep) : ''
+
+  const isPlayingAnim = introStage === 'prefix' && !playPaused
+  const isPausedAnim = introStage === 'prefix' && playPaused
+  const statusPaused = introStage === 'prefix' && playPaused ? ' · paused' : ''
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -297,14 +462,14 @@ export default function CATDemo() {
         <div className="mb-8">
           <div className="flex flex-wrap items-baseline justify-between gap-3 mb-2">
             <h1 className="text-3xl font-bold tracking-tight text-gray-900">
-              CAT: Conditional Attribute Transformers
+              Conditional Attribute Transformers (CAT)
             </h1>
             {ARXIV_PAPER_URL ? (
               <a
                 href={ARXIV_PAPER_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm font-medium text-[#4aaa94] hover:underline"
+                className="text-sm font-medium text-[#5278d9] hover:underline"
               >
                 Paper on arXiv →
               </a>
@@ -343,19 +508,18 @@ export default function CATDemo() {
                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
                   steerTarget === '5' ? 'text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
                 }`}
-                style={steerTarget === '5' ? { background: TEAL, border: '1px solid #5ab89e' } : {}}
+                style={steerTarget === '5' ? { background: STAR5, border: `1px solid ${STAR5_BORDER}` } : {}}
               >
                 ★★★★★ 5-star
               </button>
               <button
                 type="button"
                 onClick={() => onSteerChange('1')}
-                disabled={!star1Ready}
-                title={!star1Ready ? '1★ trace data coming soon' : 'Steer toward 1★ reviews'}
+                title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
                   steerTarget === '1' ? 'text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
-                } ${!star1Ready ? 'opacity-45 cursor-not-allowed' : ''}`}
-                style={steerTarget === '1' ? { background: BLUE, border: '1px solid #9bb3f0' } : {}}
+                }`}
+                style={steerTarget === '1' ? { background: STAR1, border: `1px solid ${STAR1_BORDER}` } : {}}
               >
                 ★☆☆☆☆ 1-star
               </button>
@@ -369,21 +533,13 @@ export default function CATDemo() {
         {/* Generated text */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
           <div className="text-xs text-gray-400 uppercase tracking-widest mb-3 font-semibold">Generated text</div>
-          <p className="text-xs text-gray-500 mb-3 leading-relaxed">
-            Prefix <span className="font-mono text-gray-600">[sos] I really</span> is fixed context (shown in grey). Press <strong className="text-gray-700">Play</strong> to reveal it word by word; then step through CAT decoding steered toward <strong className="text-gray-700">{steerLabel}</strong> using the satisficing rule above.
-          </p>
           <div className="text-lg leading-relaxed font-mono min-h-10 text-gray-600">
-            {introStage === 'pre' && (
-              <span className="text-gray-300 select-none">···</span>
-            )}
-            {introStage === 'prefix' && (
-              <span style={{ color: PREFIX_GREY }}>{prefixShown}</span>
-            )}
+            <span className="text-gray-900">{fixedPrompt}</span>
+            {playCommittedText ? <ContextText context={playCommittedText} /> : null}
             {live && step && (
               <>
-                <span style={{ color: PREFIX_GREY }}>[sos] </span>
-                <ContextText context={step.context} />
-                <span style={{ background: '#d4f2ea', color: '#2a7d68', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>
+                {livePriorText ? <ContextText context={livePriorText} /> : null}
+                <span style={{ background: STAR5_SOFT, color: '#3d5cad', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>
                   {renderSpecial(step.chosen_token_display)}
                 </span>
               </>
@@ -391,20 +547,20 @@ export default function CATDemo() {
           </div>
         </div>
 
-        {/* Chart */}
-        {hasSteps && (
-          <div className={`bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm ${!live ? 'opacity-40 pointer-events-none' : ''}`}>
+        {/* Chart: updates each token during Play, then follows live step */}
+        {vizActive && (
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <div className="text-xs text-gray-400 uppercase tracking-widest font-semibold">
                 Attribute probabilities of chosen tokens
               </div>
               <div className="flex items-center gap-4 text-xs text-gray-600">
                 <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: BLUE }} />
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: STAR1 }} />
                   1★ prob
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: TEAL }} />
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: STAR5 }} />
                   5★ prob
                 </span>
               </div>
@@ -412,23 +568,40 @@ export default function CATDemo() {
             <div className="relative h-[220px]">
               <canvas ref={canvasRef} />
             </div>
-            {!live && (
-              <p className="text-center text-xs text-gray-400 mt-2">Chart updates after Play finishes the prefix.</p>
-            )}
           </div>
         )}
 
         {/* Controls */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-gray-600">
+              <span className="whitespace-nowrap">Token delay (ms)</span>
+              <input
+                type="number"
+                min={0}
+                max={5000}
+                step={50}
+                value={tokenRevealMs}
+                disabled={introStage === 'prefix' && !playPaused}
+                onChange={e => {
+                  const v = parseInt(e.target.value, 10)
+                  setTokenRevealMs(Number.isFinite(v) ? Math.max(0, Math.min(5000, v)) : DEFAULT_TOKEN_REVEAL_MS)
+                }}
+                className="w-24 rounded-md border border-gray-300 px-2 py-1.5 font-mono text-sm tabular-nums disabled:opacity-50"
+              />
+            </label>
             <button
               type="button"
-              onClick={playPrefix}
-              disabled={!hasSteps || introStage === 'prefix'}
+              onClick={() => {
+                if (isPlayingAnim) pausePlay()
+                else if (isPausedAnim) resumePlay()
+                else playPrefix()
+              }}
+              disabled={live && hasSteps}
               className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-35 disabled:cursor-not-allowed"
               style={{ background: '#4b5563', border: '1px solid #374151' }}
             >
-              ▶ Play
+              {isPlayingAnim ? '⏸ Pause' : isPausedAnim ? '▶ Resume' : '▶ Play'}
             </button>
             <button
               type="button"
@@ -439,37 +612,51 @@ export default function CATDemo() {
             </button>
             <button
               type="button"
-              onClick={() => setCurrentStep(s => Math.max(s - 1, 0))}
-              disabled={!live || currentStep === 0}
+              onClick={() => {
+                if (live) setCurrentStep(s => Math.max(s - 1, 0))
+                else setPlayTokenCount(c => Math.max(0, c - 1))
+              }}
+              disabled={!manualScrub || (live ? currentStep === 0 : playTokenCount === 0)}
               className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-600 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
             >
               ← Back
             </button>
             <button
               type="button"
-              onClick={() => setCurrentStep(s => Math.min(s + 1, steps.length - 1))}
-              disabled={!live || currentStep >= steps.length - 1}
+              onClick={() => {
+                if (live) setCurrentStep(s => Math.min(s + 1, steps.length - 1))
+                else setPlayTokenCount(c => Math.min(steps.length, c + 1))
+              }}
+              disabled={
+                !manualScrub || (live ? currentStep >= steps.length - 1 : playTokenCount >= steps.length)
+              }
               className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
-              style={{ background: TEAL, border: '1px solid #5ab89e' }}
+              style={{ background: STAR5, border: `1px solid ${STAR5_BORDER}` }}
             >
               Next →
             </button>
           </div>
           <div className="text-sm text-gray-400 font-mono">
-            {live ? `Step ${currentStep + 1} / ${steps.length}` : introStage === 'prefix' ? 'Prefix…' : 'Press Play'}
+            {vizActive
+              ? `Step ${vizStepIndex + 1} / ${steps.length}${statusPaused}`
+              : introStage === 'prefix'
+                ? `Playing…${statusPaused}`
+                : !hasSteps
+                  ? 'No trace yet'
+                  : 'Press Play'}
           </div>
         </div>
 
         {/* Selection logic */}
-        {live && step && (
-          <div className="rounded-lg px-4 py-2.5 mb-5 text-sm" style={{ background: '#f0faf8', border: '1px solid #b8e6d9' }}>
-            <span className="font-semibold mr-1" style={{ color: '#4aaa94' }}>Selection logic:</span>
+        {vizActive && step && (
+          <div className="rounded-lg px-4 py-2.5 mb-5 text-sm" style={{ background: '#f0f4ff', border: '1px solid #d6e2ff' }}>
+            <span className="font-semibold mr-1" style={{ color: '#4566c7' }}>Selection logic:</span>
             <span className="text-gray-600">{step.explanation}</span>
           </div>
         )}
 
         {/* Candidate table */}
-        {live && step && (
+        {vizActive && step && (
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
               <div className="text-xs text-gray-400 uppercase tracking-widest font-semibold">
@@ -501,19 +688,19 @@ export default function CATDemo() {
                   {sortedRows.map((row, i) => {
                     const isChosen = row.token.trim() === step.chosen_token.trim()
                     const bgProb = cellBg(colNorm(row.prob,  minProb, maxProb), YELLOW)
-                    const bg1    = cellBg(colNorm(row.star1, min1,    max1),    BLUE)
-                    const bg5    = cellBg(colNorm(row.star5, min5,    max5),    TEAL)
+                    const bg1    = cellBg(colNorm(row.star1, min1,    max1),    STAR1)
+                    const bg5    = cellBg(colNorm(row.star5, min5,    max5),    STAR5)
                     return (
                       <tr
                         key={i}
                         className="transition-colors hover:brightness-95"
-                        style={{ background: 'white', outline: isChosen ? `2px solid ${TEAL}` : 'none', outlineOffset: '-2px' }}
+                        style={{ background: 'white', outline: isChosen ? `2px solid ${STAR5}` : 'none', outlineOffset: '-2px' }}
                       >
                         <td className="px-5 py-2.5 font-medium font-mono text-gray-800 border-b border-gray-50">
                           <div className="flex items-center gap-2">
                             {renderSpecial(row.token)}
                             {isChosen && (
-                              <span className="text-xs text-white px-1.5 py-0.5 rounded font-semibold" style={{ background: TEAL }}>
+                              <span className="text-xs text-white px-1.5 py-0.5 rounded font-semibold" style={{ background: STAR5 }}>
                                 chosen
                               </span>
                             )}
