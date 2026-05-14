@@ -14,10 +14,7 @@ const STAR5_BORDER = '#4a72d9'
 const STAR1_BORDER = '#b84a4c'
 
 /** Optional: set `NEXT_PUBLIC_ARXIV_URL` in `.env.local` when the paper is live. */
-const ARXIV_PAPER_URL =
-  typeof process !== 'undefined' && process.env.NEXT_PUBLIC_ARXIV_URL
-    ? process.env.NEXT_PUBLIC_ARXIV_URL.trim()
-    : ''
+const ARXIV_PAPER_URL = 'https://arxiv.org'
 
 const ATTR_THRESHOLD = '0.8'
 const TOKEN_EPSILON = '0.001'
@@ -234,13 +231,13 @@ export default function CATDemo() {
             animation: { duration: 300 },
             scales: {
               x: {
-                ticks: { color: '#9ca3af', maxRotation: 45, font: { family: 'JetBrains Mono, monospace', size: 11 } },
+                ticks: { color: '#374151', maxRotation: 45, font: { family: 'JetBrains Mono, monospace', size: 11 } },
                 grid:  { display: false },
                 border: { color: '#e5e7eb' },
               },
               y: {
                 min: 0, max: 1,
-                ticks: { color: '#9ca3af', font: { size: 11 }, callback: v => (v * 100).toFixed(0) + '%' },
+                ticks: { color: '#374151', font: { size: 11 }, callback: v => (v * 100).toFixed(0) + '%' },
                 grid:  { display: false },
                 border: { color: '#e5e7eb' },
               },
@@ -456,84 +453,79 @@ export default function CATDemo() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="bg-gray-50 text-gray-900 min-h-screen">
-      <div className="max-w-5xl mx-auto px-6 py-10">
+      <div className="max-w-6xl mx-auto px-6 py-10">
 
         {/* Header */}
         <div className="mb-8">
-          <div className="flex flex-wrap items-baseline justify-between gap-3 mb-2">
-            <h1 className="text-3xl font-bold tracking-tight text-gray-900">
+          <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
+            <h1 className="text-4xl sm:text-3xl font-extrabold tracking-tight text-gray-900 leading-[1.1] max-w-4xl">
               Conditional Attribute Transformers (CAT)
             </h1>
-            {ARXIV_PAPER_URL ? (
-              <a
-                href={ARXIV_PAPER_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm font-medium text-[#5278d9] hover:underline"
-              >
-                Paper on arXiv →
-              </a>
-            ) : (
-              <span className="text-sm text-gray-400 border border-dashed border-gray-300 rounded-lg px-3 py-1.5">
-                arXiv link (add <code className="text-xs text-gray-500">NEXT_PUBLIC_ARXIV_URL</code> in <code className="text-xs text-gray-500">.env.local</code>)
-              </span>
-            )}
+            <a href={ARXIV_PAPER_URL} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-[#5278d9] hover:underline shrink-0">Paper on arXiv →</a>
           </div>
 
-          <div className="text-gray-600 text-sm max-w-3xl space-y-3 leading-relaxed">
-            <p>
-              What if a language model could predict not only the next token, but also its consequences?
-              <span className="text-gray-500"> Conditional Attribute Transformers (CAT) jointly estimate the next token and, for each candidate next token, sequence-level outcomes—enabling attribution, counterfactual comparison across next-token choices, and steering via sequential selection.</span>
-            </p>
-            <p className="text-gray-500">
-              In one forward pass they support token-level attribution to downstream outcomes, counterfactual reasoning under alternative next tokens, and steering toward safer or better outcomes. They set strong results on RL and language modeling; in medical foundation models they support interpretable dynamic risk estimation with massive speedups over sampling. Joint training can also improve plain next-token prediction.
-            </p>
-          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_min(260px,30%)] xl:grid-cols-[1fr_280px] gap-6 lg:gap-10 items-start">
+            <div className="min-w-0 space-y-5">
+              <div className="text-gray-900 text-sm sm:text-base w-full space-y-3 leading-relaxed">
+                <p>
+                  What if a language model could predict not only the next token, but also its consequences?
+                  <br></br><span className="font-medium"> Conditional Attribute Transformers (CAT) jointly estimate the next token and, for each candidate next token, sequence-level outcomes enabling attribution, counterfactual comparison across next-token choices, and steering via sequential selection.</span>
+                </p>
+                <p>
+                  In one forward pass they support token-level attribution to downstream outcomes, counterfactual reasoning under alternative next tokens, and steering toward safer or better outcomes. They set strong results on RL and language modeling; in medical foundation models they support interpretable dynamic risk estimation with massive speedups over sampling. Joint training can also improve plain next-token prediction.
+                </p>
+              </div>
 
-          <div className="mt-5 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm shadow-sm max-w-3xl">
-            <div className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1">Satisficing criterion</div>
-            <p className="text-gray-700">
-              Attribute threshold: <span className="font-mono tabular-nums">{ATTR_THRESHOLD}</span>
-              <span className="text-gray-300 mx-2">·</span>
-              Token epsilon: <span className="font-mono tabular-nums">{TOKEN_EPSILON}</span>
-            </p>
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">Steer toward</span>
-            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm">
-              <button
-                type="button"
-                onClick={() => onSteerChange('5')}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                  steerTarget === '5' ? 'text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
-                }`}
-                style={steerTarget === '5' ? { background: STAR5, border: `1px solid ${STAR5_BORDER}` } : {}}
-              >
-                ★★★★★ 5-star
-              </button>
-              <button
-                type="button"
-                onClick={() => onSteerChange('1')}
-                title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                  steerTarget === '1' ? 'text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
-                }`}
-                style={steerTarget === '1' ? { background: STAR1, border: `1px solid ${STAR1_BORDER}` } : {}}
-              >
-                ★☆☆☆☆ 1-star
-              </button>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-xs font-semibold uppercase tracking-wide text-gray-900">Steer toward</span>
+                <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => onSteerChange('5')}
+                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      steerTarget === '5' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
+                    }`}
+                    style={steerTarget === '5' ? { background: STAR5, border: `1px solid ${STAR5_BORDER}` } : {}}
+                  >
+                    ★★★★★ 5-star
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSteerChange('1')}
+                    title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
+                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      steerTarget === '1' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
+                    }`}
+                    style={steerTarget === '1' ? { background: STAR1, border: `1px solid ${STAR1_BORDER}` } : {}}
+                  >
+                    ★☆☆☆☆ 1-star
+                  </button>
+                </div>
+              </div>
             </div>
-            {!star1Ready && (
-              <span className="text-xs text-gray-400">1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).</span>
-            )}
+
+            <aside className="lg:sticky lg:top-6 shrink-0 w-full">
+              <div className="rounded-lg border border-gray-200 bg-white px-5 py-4 text-sm shadow-sm">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-4">Satisficing criterion</div>
+                <div className="space-y-5 text-gray-900">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-1.5">Attribute threshold</div>
+                    <div className="font-mono tabular-nums text-xl font-bold tracking-tight">{ATTR_THRESHOLD}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-1.5">Token epsilon</div>
+                    <div className="font-mono tabular-nums text-xl font-bold tracking-tight">{TOKEN_EPSILON}</div>
+                  </div>
+                </div>
+              </div>
+            </aside>
           </div>
         </div>
 
         {/* Generated text */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
-          <div className="text-xs text-gray-400 uppercase tracking-widest mb-3 font-semibold">Generated text</div>
-          <div className="text-lg leading-relaxed font-mono min-h-10 text-gray-600">
+          <div className="text-xs text-gray-900 uppercase tracking-widest mb-3 font-semibold">Generated text</div>
+          <div className="text-lg leading-relaxed font-mono min-h-10 text-gray-900">
             <span className="text-gray-900">{fixedPrompt}</span>
             {playCommittedText ? <ContextText context={playCommittedText} /> : null}
             {live && step && (
@@ -551,10 +543,10 @@ export default function CATDemo() {
         {vizActive && (
           <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
-              <div className="text-xs text-gray-400 uppercase tracking-widest font-semibold">
+              <div className="text-xs text-gray-900 uppercase tracking-widest font-semibold">
                 Attribute probabilities of chosen tokens
               </div>
-              <div className="flex items-center gap-4 text-xs text-gray-600">
+              <div className="flex items-center gap-4 text-xs text-gray-900 font-medium">
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block w-3 h-3 rounded-full" style={{ background: STAR1 }} />
                   1★ prob
@@ -574,7 +566,7 @@ export default function CATDemo() {
         {/* Controls */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2 text-sm text-gray-600">
+            <label className="flex items-center gap-2 text-sm text-gray-900 font-medium">
               <span className="whitespace-nowrap">Token delay (ms)</span>
               <input
                 type="number"
@@ -606,7 +598,7 @@ export default function CATDemo() {
             <button
               type="button"
               onClick={resetIntro}
-              className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-600 transition-colors shadow-sm"
+              className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm"
             >
               ↺ Reset
             </button>
@@ -617,7 +609,7 @@ export default function CATDemo() {
                 else setPlayTokenCount(c => Math.max(0, c - 1))
               }}
               disabled={!manualScrub || (live ? currentStep === 0 : playTokenCount === 0)}
-              className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-600 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
+              className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
             >
               ← Back
             </button>
@@ -636,7 +628,7 @@ export default function CATDemo() {
               Next →
             </button>
           </div>
-          <div className="text-sm text-gray-400 font-mono">
+          <div className="text-sm text-gray-900 font-mono font-medium">
             {vizActive
               ? `Step ${vizStepIndex + 1} / ${steps.length}${statusPaused}`
               : introStage === 'prefix'
@@ -651,7 +643,7 @@ export default function CATDemo() {
         {vizActive && step && (
           <div className="rounded-lg px-4 py-2.5 mb-5 text-sm" style={{ background: '#f0f4ff', border: '1px solid #d6e2ff' }}>
             <span className="font-semibold mr-1" style={{ color: '#4566c7' }}>Selection logic:</span>
-            <span className="text-gray-600">{step.explanation}</span>
+            <span className="text-gray-900">{step.explanation}</span>
           </div>
         )}
 
@@ -659,17 +651,17 @@ export default function CATDemo() {
         {vizActive && step && (
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-              <div className="text-xs text-gray-400 uppercase tracking-widest font-semibold">
+              <div className="text-xs text-gray-900 uppercase tracking-widest font-semibold">
                 Candidate tokens at current position
               </div>
-              <div className="text-xs text-gray-400">
+              <div className="text-xs text-gray-900">
                 Click column headers to sort · Column color = attribute intensity
               </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-gray-50 text-gray-400 text-xs uppercase tracking-wide border-b border-gray-100">
+                  <tr className="bg-gray-50 text-gray-900 text-xs uppercase tracking-wide border-b border-gray-100">
                     <th className={`${thClass('token')} text-left`} onClick={() => handleSort('token')}>
                       Token <span className="ml-1 opacity-60">{sortIcon('token')}</span>
                     </th>
@@ -725,7 +717,7 @@ export default function CATDemo() {
         )}
 
         {!hasSteps && (
-          <div className="rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center text-gray-500 text-sm">
+          <div className="rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center text-gray-900 text-sm font-medium">
             No step data for this steer target yet.
           </div>
         )}
