@@ -489,7 +489,7 @@ export default function CATDemo() {
                   <br></br><span className="font-medium"> Conditional Attribute Transformers (CAT) jointly estimate the next token and, for each candidate next token, sequence-level outcomes enabling attribution, counterfactual comparison across next-token choices, and steering via sequential selection.</span>
                 </p>
                 <p>
-                  In one forward pass they support token-level attribution to downstream outcomes, counterfactual reasoning under alternative next tokens, and steering toward safer or better outcomes. They set strong results on RL and language modeling; in medical foundation models they support interpretable dynamic risk estimation with massive speedups over sampling. Joint training can also improve plain next-token prediction.
+                  In one forward pass CAT supports token-level attribution to downstream outcomes, counterfactual reasoning under alternative next tokens, and steering toward safer or better outcomes. It delivers strong results on RL and language modeling; in medical foundation models it supports interpretable dynamic risk estimation with massive speedups over sampling. Joint training can also improve plain next-token prediction.
                 </p>
               </div>
             </div>
