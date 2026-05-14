@@ -144,10 +144,6 @@ export default function CATDemo() {
     return Math.min(steps.length, playTokenCount)
   }, [vizActive, hasSteps, live, steps.length, currentStep, playTokenCount])
 
-  /** Back / Next (and arrow keys): live walkthrough, or paused Play to step by token count. */
-  const manualScrub =
-    hasSteps && (live || (introStage === 'prefix' && playPaused))
-
   const fixedPrompt = useMemo(() => getFixedSteerPromptDisplay(steps), [steps])
   const { fixedPromptTrimmed, fixedPromptTrailing } = useMemo(() => {
     const trimmed = fixedPrompt.trimEnd()
@@ -289,10 +285,19 @@ export default function CATDemo() {
       if (live) {
         if (e.key === 'ArrowRight') setCurrentStep(s => Math.min(s + 1, steps.length - 1))
         if (e.key === 'ArrowLeft') setCurrentStep(s => Math.max(s - 1, 0))
+      } else if (introStage === 'pre' && e.key === 'ArrowRight') {
+        setIntroStage('prefix')
+        setPlayPaused(true)
+        setPlayTokenCount(c => Math.min(steps.length, c + 1))
       } else if (introStage === 'prefix' && playPaused) {
         if (e.key === 'ArrowRight')
           setPlayTokenCount(c => Math.min(steps.length, c + 1))
-        if (e.key === 'ArrowLeft') setPlayTokenCount(c => Math.max(0, c - 1))
+        if (e.key === 'ArrowLeft')
+          setPlayTokenCount(c => {
+            const nxt = Math.max(0, c - 1)
+            if (nxt === 0) setIntroStage('pre')
+            return nxt
+          })
       }
     }
     window.addEventListener('keydown', onKey)
@@ -454,6 +459,14 @@ export default function CATDemo() {
   const isPausedAnim = introStage === 'prefix' && playPaused
   const statusPaused = introStage === 'prefix' && playPaused ? ' · paused' : ''
 
+  const nSteps = steps.length
+  const canStepForward =
+    hasSteps &&
+    (live ? currentStep < nSteps - 1 : playTokenCount < nSteps && (introStage === 'pre' || (introStage === 'prefix' && playPaused)))
+  const canStepBack =
+    hasSteps &&
+    (live ? currentStep > 0 : playTokenCount > 0 && (introStage !== 'prefix' || playPaused))
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="bg-gray-50 text-gray-900 min-h-screen">
@@ -478,33 +491,6 @@ export default function CATDemo() {
                 <p>
                   In one forward pass they support token-level attribution to downstream outcomes, counterfactual reasoning under alternative next tokens, and steering toward safer or better outcomes. They set strong results on RL and language modeling; in medical foundation models they support interpretable dynamic risk estimation with massive speedups over sampling. Joint training can also improve plain next-token prediction.
                 </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-xs font-semibold uppercase tracking-wide text-gray-900">Steer toward</span>
-                <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm">
-                  <button
-                    type="button"
-                    onClick={() => onSteerChange('5')}
-                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                      steerTarget === '5' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
-                    }`}
-                    style={steerTarget === '5' ? { background: STAR5, border: `1px solid ${STAR5_BORDER}` } : {}}
-                  >
-                    ★★★★★ 5-star
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSteerChange('1')}
-                    title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
-                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                      steerTarget === '1' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
-                    }`}
-                    style={steerTarget === '1' ? { background: STAR1, border: `1px solid ${STAR1_BORDER}` } : {}}
-                  >
-                    ★☆☆☆☆ 1-star
-                  </button>
-                </div>
               </div>
             </div>
 
@@ -547,6 +533,38 @@ export default function CATDemo() {
               </>
             )}
           </div>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 mb-6 shadow-sm flex flex-wrap items-center gap-3">
+          <span className="text-xs font-semibold uppercase tracking-wide text-gray-900">Steer toward</span>
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm">
+            <button
+              type="button"
+              onClick={() => onSteerChange('5')}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                steerTarget === '5' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
+              }`}
+              style={steerTarget === '5' ? { background: STAR5, border: `1px solid ${STAR5_BORDER}` } : {}}
+            >
+              ★★★★★ 5-star
+            </button>
+            <button
+              type="button"
+              onClick={() => onSteerChange('1')}
+              title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                steerTarget === '1' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
+              }`}
+              style={steerTarget === '1' ? { background: STAR1, border: `1px solid ${STAR1_BORDER}` } : {}}
+            >
+              ★☆☆☆☆ 1-star
+            </button>
+          </div>
+          {!star1Ready && (
+            <span className="text-xs text-gray-900">
+              1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).
+            </span>
+          )}
         </div>
 
         {/* Chart: updates each token during Play, then follows live step */}
@@ -616,9 +634,14 @@ export default function CATDemo() {
               type="button"
               onClick={() => {
                 if (live) setCurrentStep(s => Math.max(s - 1, 0))
-                else setPlayTokenCount(c => Math.max(0, c - 1))
+                else
+                  setPlayTokenCount(c => {
+                    const nxt = Math.max(0, c - 1)
+                    if (nxt === 0) setIntroStage('pre')
+                    return nxt
+                  })
               }}
-              disabled={!manualScrub || (live ? currentStep === 0 : playTokenCount === 0)}
+              disabled={!canStepBack}
               className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
             >
               ← Back
@@ -626,12 +649,16 @@ export default function CATDemo() {
             <button
               type="button"
               onClick={() => {
-                if (live) setCurrentStep(s => Math.min(s + 1, steps.length - 1))
-                else setPlayTokenCount(c => Math.min(steps.length, c + 1))
+                if (live) setCurrentStep(s => Math.min(s + 1, nSteps - 1))
+                else {
+                  if (introStage === 'pre') {
+                    setIntroStage('prefix')
+                    setPlayPaused(true)
+                  }
+                  setPlayTokenCount(c => Math.min(nSteps, c + 1))
+                }
               }}
-              disabled={
-                !manualScrub || (live ? currentStep >= steps.length - 1 : playTokenCount >= steps.length)
-              }
+              disabled={!canStepForward}
               className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
               style={{ background: STAR5, border: `1px solid ${STAR5_BORDER}` }}
             >
