@@ -567,30 +567,6 @@ export default function CATDemo() {
           )}
         </div>
 
-        {/* Chart: updates each token during Play, then follows live step */}
-        {vizActive && (
-          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <div className="text-xs text-gray-900 uppercase tracking-widest font-semibold">
-                Attribute probabilities of chosen tokens
-              </div>
-              <div className="flex items-center gap-4 text-xs text-gray-900 font-medium">
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: STAR1 }} />
-                  1★ prob
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: STAR5 }} />
-                  5★ prob
-                </span>
-              </div>
-            </div>
-            <div className="relative h-[220px]">
-              <canvas ref={canvasRef} />
-            </div>
-          </div>
-        )}
-
         {/* Controls */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -675,6 +651,30 @@ export default function CATDemo() {
                   : 'Press Play'}
           </div>
         </div>
+
+        {/* Chart: updates each token during Play, then follows live step */}
+        {vizActive && (
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-xs text-gray-900 uppercase tracking-widest font-semibold">
+                Attribute probabilities of chosen tokens
+              </div>
+              <div className="flex items-center gap-4 text-xs text-gray-900 font-medium">
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: STAR1 }} />
+                  1★ prob
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: STAR5 }} />
+                  5★ prob
+                </span>
+              </div>
+            </div>
+            <div className="relative h-[220px]">
+              <canvas ref={canvasRef} />
+            </div>
+          </div>
+        )}
 
         {/* Selection logic */}
         {vizActive && step && (
