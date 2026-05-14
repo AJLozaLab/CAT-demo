@@ -526,7 +526,9 @@ export default function CATDemo() {
         <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
           <div className="text-xs text-gray-900 uppercase tracking-widest mb-3 font-semibold">Generated text</div>
           <div className="text-lg leading-relaxed font-mono min-h-10 text-gray-900">
-            <span className="text-gray-900">{fixedPrompt}</span>
+            <span className="inline-block rounded-md bg-gray-100 px-2 py-0.5 text-gray-600 ring-1 ring-gray-200/80">
+              {fixedPrompt}
+            </span>
             {playCommittedText ? <ContextText context={playCommittedText} /> : null}
             {live && step && (
               <>
