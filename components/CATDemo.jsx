@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import {
   STEPS_5STAR,
   STEPS_1STAR,
@@ -83,6 +84,98 @@ function ContextText({ context }) {
       {parts.map((part, i) => (
         <span key={i}>{renderSpecial(part)}</span>
       ))}
+    </>
+  )
+}
+
+function SatisficingCriterionBar() {
+  const items = [
+    { label: 'Attribute threshold', value: ATTR_THRESHOLD },
+    { label: 'Token epsilon', value: TOKEN_EPSILON },
+    { label: 'k', value: TOP_K },
+  ]
+  return (
+    <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/80">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-gray-900 shrink-0">
+          Satisficing criterion
+        </span>
+        {items.map(({ label, value }, i) => (
+          <div key={label} className="flex items-center gap-2 text-sm">
+            {i > 0 && <span className="hidden sm:inline text-gray-300" aria-hidden>|</span>}
+            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+            <span className="font-mono tabular-nums font-bold text-gray-900">{value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SelectionReasonHint({ explanation, accent }) {
+  const btnRef = useRef(null)
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
+
+  const updatePosition = useCallback(() => {
+    const el = btnRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setPos({ top: r.top + r.height / 2, left: r.right + 8 })
+  }, [])
+
+  const show = useCallback(() => {
+    updatePosition()
+    setOpen(true)
+  }, [updatePosition])
+
+  const hide = useCallback(() => setOpen(false), [])
+
+  useEffect(() => {
+    if (!open) return
+    const onScrollOrResize = () => updatePosition()
+    window.addEventListener('scroll', onScrollOrResize, true)
+    window.addEventListener('resize', onScrollOrResize)
+    return () => {
+      window.removeEventListener('scroll', onScrollOrResize, true)
+      window.removeEventListener('resize', onScrollOrResize)
+    }
+  }, [open, updatePosition])
+
+  if (!explanation) return null
+
+  const tooltip =
+    open &&
+    createPortal(
+      <div
+        role="tooltip"
+        className="pointer-events-none fixed z-[99999] w-72 max-w-[min(18rem,calc(100vw-2rem))] -translate-y-1/2 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-left text-xs leading-relaxed text-gray-800 shadow-xl"
+        style={{ top: pos.top, left: pos.left }}
+      >
+        <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#4566c7]">
+          Selection logic
+        </span>
+        {explanation}
+      </div>,
+      document.body
+    )
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className="relative z-[1] inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold leading-none text-white cursor-help focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1"
+        style={{ background: accent }}
+        aria-label="Show selection reasoning"
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+      >
+        ?
+      </button>
+      {tooltip}
     </>
   )
 }
@@ -436,6 +529,7 @@ function applyChartStep(
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function CATDemo() {
+  const [controlMethod, setControlMethod] = useState(null) // null | '5' | '1' | 'none'
   const [steerTarget, setSteerTarget] = useState(null) // null until 5★ or 1★ is chosen
   const [activeTrace, setActiveTrace] = useState(null)
   const [branchTaken, setBranchTaken] = useState(false)
@@ -556,6 +650,7 @@ export default function CATDemo() {
     }
     for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
     prefixTimeoutsRef.current = []
+    setControlMethod(null)
     setSteerTarget(null)
     setActiveTrace(null)
     setBranchTaken(false)
@@ -582,6 +677,7 @@ export default function CATDemo() {
     clearPlaybackTimers()
     const targetSteps = next === '5' ? STEPS_5STAR : STEPS_1STAR
     const startStep = countPromptOnlySteps(targetSteps)
+    setControlMethod(next)
     setSteerTarget(next)
     setFirstSteerTarget(next)
     setActiveTrace(targetSteps)
@@ -596,6 +692,7 @@ export default function CATDemo() {
 
   const onNoSteerChange = () => {
     clearPlaybackTimers()
+    setControlMethod('none')
     setSteerTarget(null)
     setFirstSteerTarget(null)
     setActiveTrace(null)
@@ -1025,49 +1122,25 @@ export default function CATDemo() {
         {/* Header */}
         <div className="mb-8">
           <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
-            <h1 className="text-4xl sm:text-3xl font-extrabold tracking-tight text-gray-900 leading-[1.1] max-w-4xl">
+            <h1 className="text-4xl sm:text-3xl font-extrabold tracking-tight text-gray-900 leading-[1.1]">
               Conditional Attribute Transformers (CAT)
             </h1>
             <a href={ARXIV_PAPER_URL} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-[#5278d9] hover:underline shrink-0">Paper on arXiv →</a>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_min(260px,30%)] xl:grid-cols-[1fr_280px] gap-6 lg:gap-10 items-start">
-            <div className="min-w-0 space-y-5">
-              <div className="text-gray-900 text-xs sm:text-sm w-full space-y-3 leading-relaxed">
-                <p>
+          <div className="text-gray-900 text-xs sm:text-sm w-full space-y-3 leading-relaxed">
+            <p>
                   What if a language model could predict not only the next token, but also its consequences?
                 </p>
-                <p>
+            <p>
                   We introduce <span className='font-bold'>Conditional Attribute Transformers</span>, which jointly estimate the next token and, for each possible next token choice, sequence-level properties or outcomes.
                 </p>
-                <p>
+            <p>
                   This gives generative models three key capabilities in a single forward pass: (1) token-level attribution to downstream outcomes, (2) counterfactual reasoning about how an outcome would change under alternative next token choices, and (3) steering toward safer or more optimal outcomes through sequential next token selection.
                 </p>
-                <p>
+            <p>
                   We show that Conditional Attribute Transformers achieve <span className='font-bold'>state-of-the-art performance</span> in reinforcement learning tasks and language modeling. In medical foundation models, they enable dynamic, interpretable risk estimation for downstream clinical outcomes and elucidate the tokens that drive risk, while achieving a <span className='font-bold'>10<sup>8</sup>× speedup over traditional sampling-based approaches</span>. As an additional benefit, we find that this joint task <span className='font-bold'>improves next-token prediction</span> in baseline language models.
                 </p>
-              </div>
-            </div>
-
-            <aside className="lg:sticky lg:top-6 shrink-0 w-full">
-              <div className="rounded-lg border border-gray-200 bg-white px-5 py-4 text-sm shadow-sm">
-                <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-4">Satisficing criterion</div>
-                <div className="space-y-5 text-gray-900">
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-1.5">Attribute threshold</div>
-                    <div className="font-mono tabular-nums text-xl font-bold tracking-tight">{ATTR_THRESHOLD}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-1.5">Token epsilon</div>
-                    <div className="font-mono tabular-nums text-xl font-bold tracking-tight">{TOKEN_EPSILON}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-1.5">k</div>
-                    <div className="font-mono tabular-nums text-xl font-bold tracking-tight">{TOP_K}</div>
-                  </div>
-                </div>
-              </div>
-            </aside>
           </div>
         </div>
 
@@ -1143,7 +1216,7 @@ export default function CATDemo() {
               type="button"
               onClick={onNoSteerChange}
               className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
-                isPreSteer
+                controlMethod === 'none'
                   ? 'border-gray-400 bg-gray-100 text-gray-900 font-semibold'
                   : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
               }`}
@@ -1156,9 +1229,13 @@ export default function CATDemo() {
               1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).
             </p>
           )}
-          {isPreSteer ? (
+          {controlMethod == null ? (
             <p className="mt-2 text-sm text-gray-600">
               Choose 5★, 1★, or no steering to explore next-token probabilities.
+            </p>
+          ) : controlMethod === 'none' ? (
+            <p className="mt-2 text-sm text-gray-600">
+              No-steering walkthrough data coming soon.
             </p>
           ) : (
             <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -1262,6 +1339,11 @@ export default function CATDemo() {
             >
               Next →
             </button>
+            {controlMethod == null && (
+              <span className="text-sm text-gray-500">
+                Choose a control method above to continue through the sequence.
+              </span>
+            )}
           </div>
           <div className="text-sm text-gray-900 font-mono font-medium">
             {vizActive
@@ -1270,9 +1352,13 @@ export default function CATDemo() {
                 ? `Playing…${statusPaused}`
                 : !hasSteps
                   ? 'No trace yet'
-                  : isPreSteer
-                    ? 'At really · choose a control mode'
-                    : 'Use ← / → to step'}
+                  : controlMethod == null
+                    ? 'At really · choose a control method'
+                    : controlMethod === 'none'
+                      ? 'No steering · data coming soon'
+                      : isPreSteer
+                        ? 'At really'
+                        : 'Use ← / → to step'}
           </div>
         </div>
 
@@ -1302,17 +1388,10 @@ export default function CATDemo() {
           </div>
         )}
 
-        {/* Selection logic */}
-        {vizActive && step && (
-          <div className="rounded-lg px-4 py-2.5 mb-5 text-sm" style={{ background: '#f0f4ff', border: '1px solid #d6e2ff' }}>
-            <span className="font-semibold mr-1" style={{ color: '#4566c7' }}>Selection logic:</span>
-            <span className="text-gray-900">{step.explanation}</span>
-          </div>
-        )}
-
         {/* Candidate table */}
         {vizActive && step && (
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-visible">
+            <SatisficingCriterionBar />
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
               <div className="text-xs text-gray-900 uppercase tracking-widest font-semibold">
                 Candidate tokens at current position
@@ -1321,7 +1400,7 @@ export default function CATDemo() {
                 Click column headers to sort · Column color = attribute intensity
               </div>
             </div>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded-b-xl">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-gray-900 text-xs uppercase tracking-wide border-b border-gray-100">
@@ -1351,13 +1430,16 @@ export default function CATDemo() {
                         className="transition-colors hover:brightness-95"
                         style={{ background: 'white', outline: isChosen ? `2px solid ${steerAccent}` : 'none', outlineOffset: '-2px' }}
                       >
-                        <td className="px-5 py-2.5 font-medium font-mono text-gray-800 border-b border-gray-50">
+                        <td className="relative px-5 py-2.5 font-medium font-mono text-gray-800 border-b border-gray-50">
                           <div className="flex items-center gap-2">
                             {renderSpecial(row.token)}
                             {isChosen && (
-                              <span className="text-xs text-white px-1.5 py-0.5 rounded font-semibold" style={{ background: steerAccent }}>
-                                chosen
-                              </span>
+                              <>
+                                <span className="text-xs text-white px-1.5 py-0.5 rounded font-semibold" style={{ background: steerAccent }}>
+                                  chosen
+                                </span>
+                                <SelectionReasonHint explanation={step.explanation} accent={steerAccent} />
+                              </>
                             )}
                           </div>
                         </td>
