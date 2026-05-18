@@ -64,11 +64,14 @@ function SpecialTokenBadge({ token }) {
   return null
 }
 
+function isSpecialToken(token) {
+  return /^<\|[^|]+\|>$/.test(String(token).trim())
+}
+
 function renderSpecial(token) {
   const t = token.trim()
-  const isSpecial = /^<\|[^|]+\|>$/.test(t)
-  if (isSpecial) return <SpecialTokenBadge token={token} />
-  if (token.trim() === '') return <span className="text-gray-400 italic">[space]</span>
+  if (isSpecialToken(t)) return <SpecialTokenBadge token={token} />
+  if (token.trim() === '') return <>{token}</>
   return <>{token}</>
 }
 
@@ -152,7 +155,7 @@ function applyChartStep(chart, stepList, idx, visibleCount, { preSteer = false }
     ds.pointRadius      = Array.from({ length: n }, (_, i) => (i === hi ? 8 : i <= hi ? 4 : 0))
     ds.pointHoverRadius = Array.from({ length: n }, (_, i) => (i <= hi ? 6 : 0))
   })
-  chart.update()
+  chart.update('none')
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -350,7 +353,7 @@ export default function CATDemo() {
           options: {
             responsive: true,
             maintainAspectRatio: false,
-            animation: { duration: 300 },
+            animation: false,
             scales: {
               x: {
                 ticks: { color: '#374151', maxRotation: 45, font: { family: 'JetBrains Mono, monospace', size: 11 } },
@@ -387,7 +390,7 @@ export default function CATDemo() {
       chart?.destroy()
       if (chartRef.current === chart) chartRef.current = null
     }
-  }, [vizActive, hasSteps, steps, chartVisibleCount, isPreSteer, vizStepIndex])
+  }, [vizActive, hasSteps, steps, chartVisibleCount, isPreSteer])
 
   // ── Update chart when step changes ─────────────────────────────────────────
   useEffect(() => {
@@ -628,7 +631,7 @@ export default function CATDemo() {
     isPlayingAnim || isPausedAnim
       ? committedChosenDisplay(steps, playTokenCount)
       : !isPreSteer && !live
-        ? committedChosenDisplay(steps, currentStep)
+        ? committedChosenDisplay(steps, currentStep + 1)
         : ''
   const livePriorText = live && step ? committedChosenDisplay(steps, currentStep) : ''
 
@@ -664,8 +667,8 @@ export default function CATDemo() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="bg-gray-50 text-gray-900 min-h-screen">
-      <div className="max-w-6xl mx-auto px-6 py-10">
+    <div className="bg-gray-50 text-gray-900 min-h-screen flex flex-col">
+      <div className="flex-1 max-w-6xl mx-auto px-6 py-10 w-full">
 
         {/* Header */}
         <div className="mb-8">
@@ -678,13 +681,18 @@ export default function CATDemo() {
 
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_min(260px,30%)] xl:grid-cols-[1fr_280px] gap-6 lg:gap-10 items-start">
             <div className="min-w-0 space-y-5">
-              <div className="text-gray-900 text-sm sm:text-base w-full space-y-3 leading-relaxed">
+              <div className="text-gray-900 text-xs sm:text-sm w-full space-y-3 leading-relaxed">
                 <p>
                   What if a language model could predict not only the next token, but also its consequences?
-                  <br></br><span className="font-medium"> Conditional Attribute Transformers (CAT) jointly estimate the next token and, for each candidate next token, sequence-level outcomes enabling attribution, counterfactual comparison across next-token choices, and steering via sequential selection.</span>
                 </p>
                 <p>
-                  In one forward pass CAT supports token-level attribution to downstream outcomes, counterfactual reasoning under alternative next tokens, and steering toward safer or better outcomes. It delivers strong results on RL and language modeling; in medical foundation models it supports interpretable dynamic risk estimation with massive speedups over sampling. Joint training can also improve plain next-token prediction.
+                  We introduce <span className='font-bold'>Conditional Attribute Transformers</span>, which jointly estimate the next token and, for each possible next token choice, sequence-level properties or outcomes.
+                </p>
+                <p>
+                  This gives generative models three key capabilities in a single forward pass: (1) token-level attribution to downstream outcomes, (2) counterfactual reasoning about how an outcome would change under alternative next token choices, and (3) steering toward safer or more optimal outcomes through sequential next token selection.
+                </p>
+                <p>
+                  We show that Conditional Attribute Transformers achieve <span className='font-bold'>state-of-the-art performance</span> in reinforcement learning tasks and language modeling. In medical foundation models, they enable dynamic, interpretable risk estimation for downstream clinical outcomes and elucidate the tokens that drive risk, while achieving a <span className='font-bold'>10<sup>8</sup>× speedup over traditional sampling-based approaches</span>. As an additional benefit, we find that this joint task <span className='font-bold'>improves next-token prediction</span> in baseline language models.
                 </p>
               </div>
             </div>
@@ -723,15 +731,19 @@ export default function CATDemo() {
             {live && step && (
               <>
                 {livePriorText ? <ContextText context={livePriorText} /> : null}
-                <span
-                  className="inline rounded px-1.5 py-0 font-semibold leading-snug align-baseline"
-                  style={{
-                    background: steerTarget === '1' ? STAR1_SOFT : STAR5_SOFT,
-                    color: steerTarget === '1' ? '#a33436' : '#3d5cad',
-                  }}
-                >
-                  {renderSpecial(step.chosen_token_display)}
-                </span>
+                {isSpecialToken(step.chosen_token_display) ? (
+                  renderSpecial(step.chosen_token_display)
+                ) : (
+                  <span
+                    className="inline rounded px-1.5 py-0 font-semibold leading-snug align-baseline"
+                    style={{
+                      background: steerTarget === '1' ? STAR1_SOFT : STAR5_SOFT,
+                      color: steerTarget === '1' ? '#a33436' : '#3d5cad',
+                    }}
+                  >
+                    {step.chosen_token_display}
+                  </span>
+                )}
               </>
             )}
           </div>
@@ -987,6 +999,37 @@ export default function CATDemo() {
         )}
 
       </div>
+
+      <footer className="border-t border-gray-200 bg-white/60">
+        <div className="max-w-6xl mx-auto px-6 py-5 text-center text-sm text-gray-600 gap-10 flex items-center justify-center">
+          <a
+            href="https://lozalab.org"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-[#5278d9] hover:underline"
+          >
+            Loza Lab
+          </a>
+          |
+          <a
+            href={ARXIV_PAPER_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-[#5278d9] hover:underline"
+          >
+            Paper on arXiv
+          </a>
+          |
+          <a
+            href="https://medicine.yale.edu/biomedical-informatics-data-science/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-[#5278d9] hover:underline"
+          >
+            Yale BIDS
+          </a>
+        </div>
+      </footer>
     </div>
   )
 }
