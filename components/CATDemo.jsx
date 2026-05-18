@@ -93,6 +93,230 @@ function chartLabelsForSteps(steps) {
   )
 }
 
+/** Highlight span aligned to vertical steer guides (same boundaries as chartBoundaryBefore). */
+function chartAlignedSpan(chart, fromIndex, toIndexExclusive, { revealEndIndex = null } = {}) {
+  const n = chart.scales.x.ticks?.length ?? 0
+  const start = Math.max(0, fromIndex)
+  const end = Math.min(n, toIndexExclusive)
+  if (start >= end) return null
+  const { left: areaLeft, right: areaRight } = chart.chartArea
+  const left = start <= 0 ? areaLeft : chartBoundaryBefore(chart, start)
+  let right = end >= n ? areaRight : chartBoundaryBefore(chart, end)
+  if (revealEndIndex != null && revealEndIndex > start) {
+    const clipEnd = Math.min(revealEndIndex, end)
+    const revealRight = clipEnd >= n ? areaRight : chartBoundaryBefore(chart, clipEnd)
+    right = Math.min(right, revealRight)
+  }
+  if (right <= left) return null
+  return { left, right }
+}
+
+function fillChartRect(ctx, left, top, right, bottom, chartArea) {
+  const l = Math.max(left, chartArea.left)
+  const r = Math.min(right, chartArea.right)
+  if (r <= l) return
+  ctx.fillRect(l, top, r - l, bottom - top)
+}
+
+/** X at category `index` from laid-out points (falls back to scale ticks). */
+function chartStepCenterX(chart, index) {
+  const el = chart.getDatasetMeta(0)?.data?.[index]
+  if (el != null && Number.isFinite(el.x)) return el.x
+  const x = chart.scales.x
+  const n = x.ticks?.length ?? 0
+  if (n === 0) return x.left
+  const i = Math.max(0, Math.min(index, n - 1))
+  return x.getPixelForTick(i)
+}
+
+/** Vertical guide biased toward the next token column (not centered in the gap). */
+function chartBoundaryBefore(chart, index, towardNext = 0.9) {
+  const { left, right } = chart.chartArea
+  if (index <= 0) return left
+  const n = chart.scales.x.ticks?.length ?? 0
+  if (index >= n) return right
+  const prevX = chartStepCenterX(chart, index - 1)
+  const nextX = chartStepCenterX(chart, index)
+  return prevX + (nextX - prevX) * towardNext
+}
+
+function drawChartGuideLabel(ctx, text, x, y, { align = 'center', color = '#4b5563' } = {}) {
+  ctx.save()
+  ctx.font = '600 10px var(--font-sans), Inter, system-ui, sans-serif'
+  ctx.fillStyle = color
+  ctx.textAlign = align
+  ctx.textBaseline = 'bottom'
+  ctx.fillText(text, x, y)
+  ctx.restore()
+}
+
+function drawChartVLine(ctx, x, top, bottom, color, dashed = true) {
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1.5
+  if (dashed) ctx.setLineDash([4, 3])
+  ctx.beginPath()
+  ctx.moveTo(x, top)
+  ctx.lineTo(x, bottom)
+  ctx.stroke()
+  ctx.restore()
+}
+
+let steerChartPluginRegistered = false
+
+const REGION_LABEL_MARGIN = 20
+
+function drawRegionLabel(ctx, text, range, chartArea, { color = '#4b5563' } = {}) {
+  if (!range || !text) return
+  const x = Math.min(
+    Math.max(range.left + REGION_LABEL_MARGIN, chartArea.left),
+    chartArea.right
+  )
+  drawChartGuideLabel(ctx, text, x, chartArea.top - 6, { align: 'left', color })
+}
+
+function drawSteerRegionGuides(chart, cfg) {
+  const { ctx, chartArea } = chart
+  const { top, bottom } = chartArea
+  const slotCount = cfg.slotCount ?? chart.scales.x.ticks?.length ?? 0
+
+  const promptLabelRange =
+    cfg.promptEndIndex > 0 ? chartAlignedSpan(chart, 0, cfg.promptEndIndex) : null
+  if (promptLabelRange) {
+    drawRegionLabel(ctx, 'Prompt', promptLabelRange, chartArea, { color: '#6b7280' })
+  }
+
+  if (cfg.preSteer || cfg.promptEndIndex <= 0) return
+
+  const firstSteerTarget = cfg.firstSteerTarget ?? cfg.steerTarget
+  const firstSteerColor = firstSteerTarget === '1' ? STAR1 : STAR5
+  const steerX = chartBoundaryBefore(chart, cfg.promptEndIndex)
+  drawChartVLine(ctx, steerX, top, bottom, firstSteerColor, true)
+
+  if (
+    cfg.branchTaken &&
+    cfg.branchIndex != null &&
+    cfg.branchIndex > cfg.promptEndIndex &&
+    cfg.steerTarget
+  ) {
+    const firstSteerLabelRange = chartAlignedSpan(chart, cfg.promptEndIndex, cfg.branchIndex)
+    if (firstSteerLabelRange) {
+      drawRegionLabel(
+        ctx,
+        `Steering toward ${starLabel(firstSteerTarget)}`,
+        firstSteerLabelRange,
+        chartArea,
+        { color: firstSteerColor }
+      )
+    }
+    const branchX = chartBoundaryBefore(chart, cfg.branchIndex)
+    const afterColor = cfg.steerTarget === '1' ? STAR1 : STAR5
+    drawChartVLine(ctx, branchX, top, bottom, afterColor, true)
+    const branchLabelRange = chartAlignedSpan(chart, cfg.branchIndex, slotCount)
+    if (branchLabelRange) {
+      drawRegionLabel(
+        ctx,
+        `Steer back toward ${starLabel(cfg.steerTarget)}`,
+        branchLabelRange,
+        chartArea,
+        { color: afterColor }
+      )
+    }
+  } else {
+    const steerLabelRange = chartAlignedSpan(chart, cfg.promptEndIndex, slotCount)
+    if (steerLabelRange) {
+      drawRegionLabel(
+        ctx,
+        `Steering toward ${starLabel(firstSteerTarget)}`,
+        steerLabelRange,
+        chartArea,
+        { color: firstSteerColor }
+      )
+    }
+  }
+}
+
+function registerSteerChartPlugin(Chart) {
+  if (steerChartPluginRegistered) return
+  steerChartPluginRegistered = true
+  Chart.register({
+    id: 'steerRegions',
+    beforeDatasetsDraw(chart) {
+      const cfg = chart.options.plugins?.steerRegions
+      if (!cfg?.enabled) return
+      const { ctx, chartArea } = chart
+      const { top, bottom } = chartArea
+      const slotCount = cfg.slotCount ?? chart.scales.x.ticks?.length ?? 0
+      const revealedEnd = Math.min(cfg.revealedCount ?? 0, slotCount)
+      const promptRange = chartAlignedSpan(chart, 0, cfg.promptEndIndex, {
+        revealEndIndex: Math.min(revealedEnd, cfg.promptEndIndex),
+      })
+      if (promptRange) {
+        ctx.save()
+        ctx.fillStyle = cfg.preSteer ? 'rgba(243, 244, 246, 0.95)' : 'rgba(243, 244, 246, 0.72)'
+        fillChartRect(ctx, promptRange.left, top, promptRange.right, bottom, chartArea)
+        ctx.restore()
+      }
+      if (cfg.preSteer || cfg.promptEndIndex <= 0) return
+      const firstSteerTarget = cfg.firstSteerTarget ?? cfg.steerTarget
+      if (
+        cfg.branchTaken &&
+        cfg.branchIndex != null &&
+        cfg.branchIndex > cfg.promptEndIndex &&
+        cfg.steerTarget
+      ) {
+        const firstSteerRange = chartAlignedSpan(chart, cfg.promptEndIndex, cfg.branchIndex, {
+          revealEndIndex: Math.min(revealedEnd, cfg.branchIndex),
+        })
+        if (firstSteerRange) {
+          ctx.save()
+          ctx.fillStyle =
+            firstSteerTarget === '1' ? 'rgba(217, 91, 93, 0.06)' : 'rgba(100, 143, 255, 0.06)'
+          fillChartRect(ctx, firstSteerRange.left, top, firstSteerRange.right, bottom, chartArea)
+          ctx.restore()
+        }
+        const branchRange = chartAlignedSpan(chart, cfg.branchIndex, slotCount, {
+          revealEndIndex: revealedEnd,
+        })
+        if (branchRange) {
+          ctx.save()
+          ctx.fillStyle =
+            cfg.steerTarget === '1' ? 'rgba(217, 91, 93, 0.06)' : 'rgba(100, 143, 255, 0.06)'
+          fillChartRect(ctx, branchRange.left, top, branchRange.right, bottom, chartArea)
+          ctx.restore()
+        }
+      } else if (cfg.promptEndIndex < revealedEnd) {
+        const steerRange = chartAlignedSpan(chart, cfg.promptEndIndex, slotCount, {
+          revealEndIndex: revealedEnd,
+        })
+        if (steerRange) {
+          ctx.save()
+          ctx.fillStyle =
+            firstSteerTarget === '1' ? 'rgba(217, 91, 93, 0.06)' : 'rgba(100, 143, 255, 0.06)'
+          fillChartRect(ctx, steerRange.left, top, steerRange.right, bottom, chartArea)
+          ctx.restore()
+        }
+      }
+    },
+    afterDatasetsDraw(chart) {
+      const cfg = chart.options.plugins?.steerRegions
+      if (!cfg?.enabled) return
+      drawSteerRegionGuides(chart, cfg)
+    },
+  })
+}
+
+function buildChartPrefixSnapshot(stepList, branchIndex) {
+  if (!stepList?.length || branchIndex <= 0) return null
+  const n = Math.min(branchIndex, stepList.length)
+  return {
+    branchIndex: n,
+    labels: chartLabelsForSteps(stepList).slice(0, n),
+    star5: stepList.slice(0, n).map(s => s.chosen_star5),
+    star1: stepList.slice(0, n).map(s => s.chosen_star1),
+  }
+}
+
 /** Concatenate steered decode tokens (skips prompt-only I / really). */
 function starLabel(target) {
   return target === '5' ? '5-Star' : '1-Star'
@@ -107,19 +331,50 @@ function committedChosenDisplay(steps, count) {
     .join('')
 }
 
-function applyChartStep(chart, stepList, idx, visibleCount, { preSteer = false } = {}) {
-  const n = Math.min(Math.max(0, visibleCount), stepList.length)
-  if (n === 0) return
-  const hi = Math.min(Math.max(0, idx), n - 1)
-  const star5 = Array(n).fill(null)
-  const star1 = Array(n).fill(null)
-  for (let i = 0; i <= hi; i++) {
-    star5[i] = stepList[i].chosen_star5
-    star1[i] = stepList[i].chosen_star1
+function applyChartStep(
+  chart,
+  stepList,
+  idx,
+  visibleCount,
+  slotCount,
+  {
+    preSteer = false,
+    steerTarget = null,
+    branchTaken = false,
+    branchFromTarget = null,
+    branchIndex = null,
+    promptEndIndex = 0,
+    prefixSnapshot = null,
+    firstSteerTarget = null,
+  } = {}
+) {
+  const capacity = Math.max(slotCount, stepList.length)
+  if (capacity === 0) return
+  const hi = Math.min(Math.max(0, idx), stepList.length - 1)
+  const revealed = Math.min(Math.max(0, visibleCount), stepList.length, capacity)
+  const stepLabels = chartLabelsForSteps(stepList)
+  const snapEnd = prefixSnapshot?.branchIndex ?? 0
+  const star5 = Array(capacity).fill(null)
+  const star1 = Array(capacity).fill(null)
+  for (let i = 0; i < revealed; i++) {
+    if (i <= hi) {
+      if (prefixSnapshot && i < snapEnd) {
+        star5[i] = prefixSnapshot.star5[i]
+        star1[i] = prefixSnapshot.star1[i]
+      } else {
+        star5[i] = stepList[i].chosen_star5
+        star1[i] = stepList[i].chosen_star1
+      }
+    }
   }
-  chart.data.labels = chartLabelsForSteps(stepList).slice(0, n)
+  chart.data.labels = Array.from({ length: capacity }, (_, i) => {
+    if (i >= revealed) return ''
+    if (prefixSnapshot && i < snapEnd) return prefixSnapshot.labels[i] ?? ''
+    return stepLabels[i] ?? ''
+  })
   chart.data.datasets[0].data = star5
   chart.data.datasets[1].data = star1
+  const n = capacity
 
   if (preSteer) {
     chart.data.datasets[0].borderColor = PROMPT_CHART_GREY
@@ -152,9 +407,30 @@ function applyChartStep(chart, stepList, idx, visibleCount, { preSteer = false }
   }
 
   chart.data.datasets.forEach(ds => {
-    ds.pointRadius      = Array.from({ length: n }, (_, i) => (i === hi ? 8 : i <= hi ? 4 : 0))
-    ds.pointHoverRadius = Array.from({ length: n }, (_, i) => (i <= hi ? 6 : 0))
+    ds.pointRadius = Array.from({ length: n }, (_, i) =>
+      i > hi || i >= revealed ? 0 : i === hi ? 8 : 4
+    )
+    ds.pointHoverRadius = Array.from({ length: n }, (_, i) =>
+      i > hi || i >= revealed ? 0 : 6
+    )
   })
+
+  chart.options.plugins.steerRegions = {
+    enabled: true,
+    preSteer,
+    promptEndIndex,
+    steerTarget,
+    branchTaken,
+    branchFromTarget,
+    branchIndex,
+    firstSteerTarget,
+    slotCount: n,
+    revealedCount: revealed,
+  }
+  if (chart.options.scales?.x?.ticks) {
+    chart.options.scales.x.ticks.autoSkip = false
+  }
+
   chart.update('none')
 }
 
@@ -164,6 +440,8 @@ export default function CATDemo() {
   const [activeTrace, setActiveTrace] = useState(null)
   const [branchTaken, setBranchTaken] = useState(false)
   const [branchFromTarget, setBranchFromTarget] = useState(null) // original path before branch switch
+  const [firstSteerTarget, setFirstSteerTarget] = useState(null) // locked when 5★/1★ is first chosen
+  const [chartPrefixSnapshot, setChartPrefixSnapshot] = useState(null)
   const [introStage, setIntroStage]   = useState('pre') // 'pre' | 'prefix' | 'live'
   const [playTokenCount, setPlayTokenCount] = useState(0)
   const [playPaused, setPlayPaused] = useState(false)
@@ -207,6 +485,42 @@ export default function CATDemo() {
     return Math.min(steps.length, currentStep + 1)
   }, [vizActive, hasSteps, isPreSteer, isPlayingAnim, isPausedAnim, steps.length, currentStep, playTokenCount])
 
+  const chartPromptEndIndex = countPromptOnlySteps(steps)
+  const pathForBranch = branchTaken && branchFromTarget ? branchFromTarget : steerTarget
+  const chartBranchIndex =
+    pathForBranch === '5'
+      ? BRANCH_FROM_5_INDEX
+      : pathForBranch === '1'
+        ? BRANCH_FROM_1_INDEX
+        : null
+  const chartApplyOpts = useMemo(
+    () => ({
+      preSteer: isPreSteer,
+      steerTarget,
+      branchTaken,
+      branchFromTarget,
+      branchIndex: chartBranchIndex,
+      promptEndIndex: chartPromptEndIndex,
+      prefixSnapshot: chartPrefixSnapshot,
+      firstSteerTarget,
+    }),
+    [
+      isPreSteer,
+      steerTarget,
+      branchTaken,
+      branchFromTarget,
+      chartBranchIndex,
+      chartPromptEndIndex,
+      chartPrefixSnapshot,
+      firstSteerTarget,
+    ]
+  )
+  const chartSlotCount = useMemo(
+    () => Math.max(STEPS_5STAR.length, STEPS_1STAR.length, PROMPT_STEPS.length),
+    []
+  )
+  const chartMinWidth = Math.max(560, chartSlotCount * 44)
+
   const fixedPrompt = useMemo(() => getFixedSteerPromptDisplay(steps), [steps])
   const { fixedPromptTrimmed, fixedPromptTrailing } = useMemo(() => {
     const trimmed = fixedPrompt.trimEnd()
@@ -246,13 +560,15 @@ export default function CATDemo() {
     setActiveTrace(null)
     setBranchTaken(false)
     setBranchFromTarget(null)
+    setFirstSteerTarget(null)
+    setChartPrefixSnapshot(null)
     setIntroStage('pre')
     setPlayTokenCount(0)
     setPlayPaused(false)
     setCurrentStep(0)
   }, [])
 
-  const onSteerChange = next => {
+  const clearPlaybackTimers = () => {
     prefixRunIdRef.current += 1
     if (prefixTimerRef.current) {
       clearInterval(prefixTimerRef.current)
@@ -260,14 +576,34 @@ export default function CATDemo() {
     }
     for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
     prefixTimeoutsRef.current = []
+  }
+
+  const onSteerChange = next => {
+    clearPlaybackTimers()
     const targetSteps = next === '5' ? STEPS_5STAR : STEPS_1STAR
     const startStep = countPromptOnlySteps(targetSteps)
     setSteerTarget(next)
+    setFirstSteerTarget(next)
     setActiveTrace(targetSteps)
     setBranchTaken(false)
     setBranchFromTarget(null)
+    setChartPrefixSnapshot(null)
     setIntroStage('pre')
     setCurrentStep(startStep)
+    setPlayTokenCount(0)
+    setPlayPaused(false)
+  }
+
+  const onNoSteerChange = () => {
+    clearPlaybackTimers()
+    setSteerTarget(null)
+    setFirstSteerTarget(null)
+    setActiveTrace(null)
+    setBranchTaken(false)
+    setBranchFromTarget(null)
+    setChartPrefixSnapshot(null)
+    setIntroStage('pre')
+    setCurrentStep(Math.max(0, PROMPT_STEPS.length - 1))
     setPlayTokenCount(0)
     setPlayPaused(false)
   }
@@ -283,6 +619,7 @@ export default function CATDemo() {
     const step = currentStepRef.current
     const branchIdx = steerTarget === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
     const resumeStep = Math.max(step, branchIdx)
+    setChartPrefixSnapshot(buildChartPrefixSnapshot(stepsRef.current, branchIdx))
     if (steerTarget === '5') {
       setBranchFromTarget('5')
       setActiveTrace(mergeTraceAtBranch(STEPS_5STAR, STEPS_5_THEN_1, branchIdx))
@@ -306,23 +643,23 @@ export default function CATDemo() {
       chartRef.current = null
       return
     }
-    const vc = chartVisibleCount
+    const capacity = chartSlotCount
     const idx = vizStepIndex
     let chart
-    const labels = chartLabelsForSteps(steps).slice(0, vc)
     import('chart.js/auto').then(({ Chart }) => {
       if (!canvasRef.current) return
+      registerSteerChartPlugin(Chart)
       chartRef.current?.destroy()
       chartRef.current = null
       try {
         chart = new Chart(canvasRef.current, {
           type: 'line',
           data: {
-            labels,
+            labels: Array(capacity).fill(''),
             datasets: [
               {
                 label: '5★ prob',
-                data: Array(vc).fill(null),
+                data: Array(capacity).fill(null),
                 borderColor: STAR5,
                 backgroundColor: STAR5_SOFT,
                 pointBackgroundColor: STAR5,
@@ -336,7 +673,7 @@ export default function CATDemo() {
               },
               {
                 label: '1★ prob',
-                data: Array(vc).fill(null),
+                data: Array(capacity).fill(null),
                 borderColor: STAR1,
                 backgroundColor: STAR1_SOFT,
                 pointBackgroundColor: STAR1,
@@ -354,9 +691,19 @@ export default function CATDemo() {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
+            layout: { padding: { top: 22 } },
             scales: {
               x: {
-                ticks: { color: '#374151', maxRotation: 45, font: { family: 'JetBrains Mono, monospace', size: 11 } },
+                ticks: {
+                  color: '#374151',
+                  maxRotation: 45,
+                  autoSkip: false,
+                  font: { family: 'JetBrains Mono, monospace', size: 11 },
+                  callback(_value, index) {
+                    const label = this.chart?.data?.labels?.[index]
+                    return label || ''
+                  },
+                },
                 grid:  { display: false },
                 border: { color: '#e5e7eb' },
               },
@@ -368,6 +715,7 @@ export default function CATDemo() {
               },
             },
             plugins: {
+              steerRegions: { enabled: false },
               legend: { display: false },
               tooltip: {
                 backgroundColor: '#fff',
@@ -381,7 +729,7 @@ export default function CATDemo() {
           },
         })
         chartRef.current = chart
-        applyChartStep(chart, steps, idx, vc, { preSteer: isPreSteer })
+        applyChartStep(chart, steps, idx, chartVisibleCount, chartSlotCount, chartApplyOpts)
       } catch (err) {
         console.error('Chart init failed', err)
       }
@@ -390,14 +738,14 @@ export default function CATDemo() {
       chart?.destroy()
       if (chartRef.current === chart) chartRef.current = null
     }
-  }, [vizActive, hasSteps, steps, chartVisibleCount, isPreSteer])
+  }, [vizActive, hasSteps, steps, chartSlotCount])
 
-  // ── Update chart when step changes ─────────────────────────────────────────
+  // ── Update chart when step / steer mode changes ──────────────────────────────
   useEffect(() => {
     const chart = chartRef.current
     if (!chart || !vizActive || chartVisibleCount <= 0) return
-    applyChartStep(chart, steps, vizStepIndex, chartVisibleCount, { preSteer: isPreSteer })
-  }, [vizStepIndex, vizActive, steps, chartVisibleCount, isPreSteer])
+    applyChartStep(chart, steps, vizStepIndex, chartVisibleCount, chartSlotCount, chartApplyOpts)
+  }, [vizStepIndex, vizActive, steps, chartVisibleCount, chartSlotCount, chartApplyOpts])
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
   useEffect(() => {
@@ -659,9 +1007,13 @@ export default function CATDemo() {
         : currentStep > steerStart)
   const steerAccent = steerTarget === '1' ? STAR1 : STAR5
   const steerAccentBorder = steerTarget === '1' ? STAR1_BORDER : STAR5_BORDER
-  const branchIndex = steerTarget === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
+  const branchIndex = chartBranchIndex
   const branchReady =
-    steerTarget === '5' ? STEPS_5_THEN_1.length > 0 : STEPS_1_THEN_5.length > 0
+    pathForBranch === '5'
+      ? STEPS_5_THEN_1.length > 0
+      : pathForBranch === '1'
+        ? STEPS_1_THEN_5.length > 0
+        : false
   const showBranchSwitch =
     !isPreSteer && !branchTaken && branchReady && vizStepIndex === branchIndex
 
@@ -749,37 +1101,67 @@ export default function CATDemo() {
           </div>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 mb-6 shadow-sm flex flex-wrap items-center gap-3">
-          <span className="text-xs font-semibold uppercase tracking-wide text-gray-900">Steer toward</span>
+        <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 mb-6 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-3">Control</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Steer toward</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onSteerChange('5')}
+              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
+                steerTarget === '5'
+                  ? 'font-semibold text-white'
+                  : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
+              }`}
+              style={
+                steerTarget === '5'
+                  ? { background: STAR5, borderColor: STAR5_BORDER }
+                  : undefined
+              }
+            >
+              ★★★★★ 5-star
+            </button>
+            <button
+              type="button"
+              onClick={() => onSteerChange('1')}
+              disabled={!star1Ready}
+              title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
+              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${
+                steerTarget === '1'
+                  ? 'font-semibold text-white'
+                  : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
+              }`}
+              style={
+                steerTarget === '1'
+                  ? { background: STAR1, borderColor: STAR1_BORDER }
+                  : undefined
+              }
+            >
+              ★☆☆☆☆ 1-star
+            </button>
+            <button
+              type="button"
+              onClick={onNoSteerChange}
+              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
+                isPreSteer
+                  ? 'border-gray-400 bg-gray-100 text-gray-900 font-semibold'
+                  : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
+              }`}
+            >
+              No steering
+            </button>
+          </div>
+          {!star1Ready && isPreSteer && (
+            <p className="mt-2 text-xs text-gray-900">
+              1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).
+            </p>
+          )}
           {isPreSteer ? (
-            <>
-              <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm">
-                <button
-                  type="button"
-                  onClick={() => onSteerChange('5')}
-                  className="px-4 py-1.5 rounded-md text-sm font-medium transition-colors text-gray-900 hover:bg-gray-50"
-                >
-                  ★★★★★ 5-star
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSteerChange('1')}
-                  disabled={!star1Ready}
-                  title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
-                  className="px-4 py-1.5 rounded-md text-sm font-medium transition-colors text-gray-900 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  ★☆☆☆☆ 1-star
-                </button>
-              </div>
-              {!star1Ready && (
-                <span className="text-xs text-gray-900">
-                  1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).
-                </span>
-              )}
-              <span className="text-sm text-gray-600">Choose 5★ or 1★ to start steering.</span>
-            </>
+            <p className="mt-2 text-sm text-gray-600">
+              Choose 5★, 1★, or no steering to explore next-token probabilities.
+            </p>
           ) : (
-            <>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <span className="text-sm font-semibold tracking-tight" style={{ color: steerAccent }}>
                 {branchTaken && branchFromTarget
                   ? `Steered toward ${starLabel(branchFromTarget)}, now steering to ${starLabel(steerTarget)}`
@@ -795,16 +1177,17 @@ export default function CATDemo() {
                     border: `1px solid ${steerTarget === '5' ? STAR1_BORDER : STAR5_BORDER}`,
                   }}
                 >
-                  Steer toward {steerTarget === '5' ? '1-Star' : '5-Star'}
+                  Steer back toward {steerTarget === '5' ? starLabel('1') : starLabel('5')}
                 </button>
               )}
-            </>
+            </div>
           )}
         </div>
 
         {/* Controls */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex flex-wrap items-center gap-3">
+            {/* Token delay — hidden for now
             <label className="flex items-center gap-2 text-sm text-gray-900 font-medium">
               <span className="whitespace-nowrap">Token delay (ms)</span>
               <input
@@ -821,6 +1204,8 @@ export default function CATDemo() {
                 className="w-24 rounded-md border border-gray-300 px-2 py-1.5 font-mono text-sm tabular-nums disabled:opacity-50"
               />
             </label>
+            */}
+            {/* Play / Pause / Resume — hidden for now
             <button
               type="button"
               onClick={() => {
@@ -834,6 +1219,7 @@ export default function CATDemo() {
             >
               {isPlayingAnim ? '⏸ Pause' : isPausedAnim ? '▶ Resume' : '▶ Play'}
             </button>
+            */}
             <button
               type="button"
               onClick={resetIntro}
@@ -885,8 +1271,8 @@ export default function CATDemo() {
                 : !hasSteps
                   ? 'No trace yet'
                   : isPreSteer
-                    ? 'At really · choose 5★ or 1★'
-                    : 'Press Play'}
+                    ? 'At really · choose a control mode'
+                    : 'Use ← / → to step'}
           </div>
         </div>
 
@@ -908,8 +1294,10 @@ export default function CATDemo() {
                 </span>
               </div>
             </div>
-            <div className="relative h-[220px]">
-              <canvas ref={canvasRef} />
+            <div className="relative h-[220px] overflow-x-auto">
+              <div className="h-full" style={{ minWidth: chartMinWidth }}>
+                <canvas ref={canvasRef} />
+              </div>
             </div>
           </div>
         )}
@@ -953,7 +1341,7 @@ export default function CATDemo() {
                 </thead>
                 <tbody>
                   {sortedRows.map((row, i) => {
-                    const isChosen = row.token.trim() === step.chosen_token.trim()
+                    const isChosen = row.token === step.chosen_token
                     const bgProb = cellBg(colNorm(row.prob,  minProb, maxProb), YELLOW)
                     const bg1    = cellBg(colNorm(row.star1, min1,    max1),    STAR1)
                     const bg5    = cellBg(colNorm(row.star5, min5,    max5),    STAR5)
