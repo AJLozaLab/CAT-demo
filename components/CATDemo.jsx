@@ -4,9 +4,14 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   STEPS_5STAR,
   STEPS_1STAR,
+  STEPS_5_THEN_1,
+  STEPS_1_THEN_5,
   PROMPT_STEPS,
+  BRANCH_FROM_5_INDEX,
+  BRANCH_FROM_1_INDEX,
   getFixedSteerPromptDisplay,
   countPromptOnlySteps,
+  mergeTraceAtBranch,
 } from '@/lib/steps-data'
 
 // ── Brand colors (5★ vs 1★) ───────────────────────────────────────────────────
@@ -86,6 +91,10 @@ function chartLabelsForSteps(steps) {
 }
 
 /** Concatenate steered decode tokens (skips prompt-only I / really). */
+function starLabel(target) {
+  return target === '5' ? '5-Star' : '1-Star'
+}
+
 function committedChosenDisplay(steps, count) {
   if (!steps?.length || count <= 0) return ''
   return steps
@@ -149,6 +158,9 @@ function applyChartStep(chart, stepList, idx, visibleCount, { preSteer = false }
 // ── Main component ────────────────────────────────────────────────────────────
 export default function CATDemo() {
   const [steerTarget, setSteerTarget] = useState(null) // null until 5★ or 1★ is chosen
+  const [activeTrace, setActiveTrace] = useState(null)
+  const [branchTaken, setBranchTaken] = useState(false)
+  const [branchFromTarget, setBranchFromTarget] = useState(null) // original path before branch switch
   const [introStage, setIntroStage]   = useState('pre') // 'pre' | 'prefix' | 'live'
   const [playTokenCount, setPlayTokenCount] = useState(0)
   const [playPaused, setPlayPaused] = useState(false)
@@ -164,10 +176,7 @@ export default function CATDemo() {
   const prefixRunIdRef = useRef(0)
 
   const isPreSteer = steerTarget == null
-  const traceSteps = useMemo(
-    () => (steerTarget === '5' ? STEPS_5STAR : steerTarget === '1' ? STEPS_1STAR : []),
-    [steerTarget]
-  )
+  const traceSteps = activeTrace ?? []
   const steps = isPreSteer ? PROMPT_STEPS : traceSteps
   const hasSteps = steps.length > 0
   const star1Ready = STEPS_1STAR.length > 0
@@ -179,9 +188,11 @@ export default function CATDemo() {
       (live || introStage === 'pre' || (introStage === 'prefix' && playTokenCount > 0)))
   /** Pre-steer: fixed at last prompt token (really); no stepping through I / really. */
   const preSteerStepIndex = Math.max(0, PROMPT_STEPS.length - 1)
+  const isPlayingAnim = introStage === 'prefix' && !playPaused
+  const isPausedAnim = introStage === 'prefix' && playPaused
   const vizStepIndex = isPreSteer
     ? preSteerStepIndex
-    : introStage === 'prefix' && playTokenCount > 0
+    : isPlayingAnim || isPausedAnim
       ? Math.max(0, playTokenCount - 1)
       : currentStep
   const step = vizActive ? steps[vizStepIndex] : null
@@ -189,9 +200,9 @@ export default function CATDemo() {
   const chartVisibleCount = useMemo(() => {
     if (!vizActive || !hasSteps) return 0
     if (isPreSteer) return PROMPT_STEPS.length
-    if (introStage === 'prefix') return Math.min(steps.length, playTokenCount)
+    if (isPlayingAnim || isPausedAnim) return Math.min(steps.length, playTokenCount)
     return Math.min(steps.length, currentStep + 1)
-  }, [vizActive, hasSteps, isPreSteer, introStage, steps.length, currentStep, playTokenCount])
+  }, [vizActive, hasSteps, isPreSteer, isPlayingAnim, isPausedAnim, steps.length, currentStep, playTokenCount])
 
   const fixedPrompt = useMemo(() => getFixedSteerPromptDisplay(steps), [steps])
   const { fixedPromptTrimmed, fixedPromptTrailing } = useMemo(() => {
@@ -207,6 +218,10 @@ export default function CATDemo() {
   playTokenCountRef.current = playTokenCount
   const currentStepRef = useRef(currentStep)
   currentStepRef.current = currentStep
+  const introStageRef = useRef(introStage)
+  introStageRef.current = introStage
+  const branchTakenRef = useRef(branchTaken)
+  branchTakenRef.current = branchTaken
 
   /** playTokenCount so viz index `stepIndex` is the active token (stepIndex is 0-based). */
   const playCountForStepIndex = stepIndex => stepIndex + 1
@@ -225,6 +240,9 @@ export default function CATDemo() {
     for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
     prefixTimeoutsRef.current = []
     setSteerTarget(null)
+    setActiveTrace(null)
+    setBranchTaken(false)
+    setBranchFromTarget(null)
     setIntroStage('pre')
     setPlayTokenCount(0)
     setPlayPaused(false)
@@ -242,10 +260,40 @@ export default function CATDemo() {
     const targetSteps = next === '5' ? STEPS_5STAR : STEPS_1STAR
     const startStep = countPromptOnlySteps(targetSteps)
     setSteerTarget(next)
+    setActiveTrace(targetSteps)
+    setBranchTaken(false)
+    setBranchFromTarget(null)
     setIntroStage('pre')
     setCurrentStep(startStep)
     setPlayTokenCount(0)
     setPlayPaused(false)
+  }
+
+  const onBranchSwitch = () => {
+    prefixRunIdRef.current += 1
+    if (prefixTimerRef.current) {
+      clearInterval(prefixTimerRef.current)
+      prefixTimerRef.current = null
+    }
+    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
+    prefixTimeoutsRef.current = []
+    const step = currentStepRef.current
+    const branchIdx = steerTarget === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
+    const resumeStep = Math.max(step, branchIdx)
+    if (steerTarget === '5') {
+      setBranchFromTarget('5')
+      setActiveTrace(mergeTraceAtBranch(STEPS_5STAR, STEPS_5_THEN_1, branchIdx))
+      setSteerTarget('1')
+    } else if (steerTarget === '1') {
+      setBranchFromTarget('1')
+      setActiveTrace(mergeTraceAtBranch(STEPS_1STAR, STEPS_1_THEN_5, branchIdx))
+      setSteerTarget('5')
+    }
+    setBranchTaken(true)
+    setCurrentStep(resumeStep)
+    setPlayTokenCount(playCountForStepIndex(resumeStep))
+    setIntroStage('pre')
+    setPlayPaused(true)
   }
 
   // ── Chart.js during Play (per revealed token) and in live walkthrough ───
@@ -359,24 +407,48 @@ export default function CATDemo() {
       if (live) {
         if (e.key === 'ArrowRight') setCurrentStep(s => Math.min(s + 1, steps.length - 1))
         if (e.key === 'ArrowLeft') setCurrentStep(s => Math.max(s - 1, 0))
-      } else if (!isPreSteer && introStage === 'pre' && e.key === 'ArrowRight') {
-        setIntroStage('prefix')
-        setPlayPaused(true)
-        setPlayTokenCount(c => Math.min(steps.length, c + 1))
-      } else if (introStage === 'prefix' && playPaused) {
-        if (e.key === 'ArrowRight')
-          setPlayTokenCount(c => Math.min(steps.length, c + 1))
-        if (e.key === 'ArrowLeft')
-          setPlayTokenCount(c => {
-            const nxt = Math.max(0, c - 1)
-            if (nxt === 0) setIntroStage('pre')
-            return nxt
-          })
+      } else if (!isPreSteer && !live && !isPlayingAnim) {
+        const min = countPromptOnlySteps(steps)
+        if (e.key === 'ArrowRight') {
+          if (isPausedAnim) {
+            setPlayTokenCount(c => {
+              const n = Math.min(steps.length, c + 1)
+              setCurrentStep(Math.max(0, n - 1))
+              return n
+            })
+          } else setCurrentStep(s => Math.min(s + 1, steps.length - 1))
+        }
+        if (e.key === 'ArrowLeft') {
+          if (isPausedAnim) {
+            setPlayTokenCount(c => {
+              const n = Math.max(0, c - 1)
+              setCurrentStep(Math.max(0, n - 1))
+              return n
+            })
+          } else setCurrentStep(s => Math.max(min, s - 1))
+        }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [live, introStage, playPaused, hasSteps, isPreSteer, steps.length, resetIntro])
+  }, [live, introStage, playPaused, hasSteps, isPreSteer, isPlayingAnim, isPausedAnim, steps.length, resetIntro])
+
+  /** Auto-pause at branch overlap so the user can switch steer targets. */
+  const tryPauseAtBranchPoint = useCallback((runId, count) => {
+    const steer = steerTargetRef.current
+    if (!steer || branchTakenRef.current) return false
+    const branchIdx = steer === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
+    const hasBranch = steer === '5' ? STEPS_5_THEN_1.length > 0 : STEPS_1_THEN_5.length > 0
+    if (!hasBranch || count !== branchIdx + 1) return false
+    if (runId !== prefixRunIdRef.current) return true
+    prefixRunIdRef.current += 1
+    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
+    prefixTimeoutsRef.current = []
+    setPlayTokenCount(count)
+    setCurrentStep(branchIdx)
+    setPlayPaused(true)
+    return true
+  }, [])
 
   const pausePlay = useCallback(() => {
     prefixRunIdRef.current += 1
@@ -386,6 +458,7 @@ export default function CATDemo() {
     }
     for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
     prefixTimeoutsRef.current = []
+    setCurrentStep(Math.max(0, playTokenCountRef.current - 1))
     setPlayPaused(true)
   }, [])
 
@@ -436,6 +509,7 @@ export default function CATDemo() {
         if (runId !== prefixRunIdRef.current) return
         count += 1
         setPlayTokenCount(count)
+        if (tryPauseAtBranchPoint(runId, count)) return
         if (count >= n) {
           finishToLive()
           return
@@ -445,7 +519,7 @@ export default function CATDemo() {
       prefixTimeoutsRef.current.push(tid)
     }
     revealNext()
-  }, [hasSteps, tokenRevealMs])
+  }, [hasSteps, tokenRevealMs, tryPauseAtBranchPoint])
 
   const playPrefix = useCallback(() => {
     prefixRunIdRef.current += 1
@@ -501,6 +575,7 @@ export default function CATDemo() {
         if (runId !== prefixRunIdRef.current) return
         count += 1
         setPlayTokenCount(count)
+        if (tryPauseAtBranchPoint(runId, count)) return
         if (count >= n) {
           finishToLive()
           return
@@ -510,7 +585,7 @@ export default function CATDemo() {
       prefixTimeoutsRef.current.push(tid)
     }
     revealNext()
-  }, [hasSteps, tokenRevealMs])
+  }, [hasSteps, tokenRevealMs, tryPauseAtBranchPoint])
 
   useEffect(() => () => {
     if (prefixTimerRef.current) clearInterval(prefixTimerRef.current)
@@ -550,24 +625,42 @@ export default function CATDemo() {
   const thClass  = col => `px-5 py-3 cursor-pointer select-none transition-colors hover:text-[#5278d9] ${sortCol === col ? 'text-[#648FFF]' : ''}`
 
   const playCommittedText =
-    introStage === 'prefix' ? committedChosenDisplay(steps, playTokenCount) : ''
+    isPlayingAnim || isPausedAnim
+      ? committedChosenDisplay(steps, playTokenCount)
+      : !isPreSteer && !live
+        ? committedChosenDisplay(steps, currentStep)
+        : ''
   const livePriorText = live && step ? committedChosenDisplay(steps, currentStep) : ''
 
-  const isPlayingAnim = introStage === 'prefix' && !playPaused
-  const isPausedAnim = introStage === 'prefix' && playPaused
-  const statusPaused = introStage === 'prefix' && playPaused ? ' · paused' : ''
+  const statusPaused = isPausedAnim ? ' · paused' : ''
 
   const nSteps = steps.length
+  const steerStart = countPromptOnlySteps(traceSteps)
   const canStepForward =
     !isPreSteer &&
     hasSteps &&
-    (live ? currentStep < nSteps - 1 : playTokenCount < nSteps && (introStage === 'pre' || (introStage === 'prefix' && playPaused)))
+    !isPlayingAnim &&
+    (live
+      ? currentStep < nSteps - 1
+      : isPausedAnim
+        ? playTokenCount < nSteps
+        : currentStep < nSteps - 1)
   const canStepBack =
     !isPreSteer &&
     hasSteps &&
-    (live ? currentStep > 0 : playTokenCount > 0 && (introStage !== 'prefix' || playPaused))
+    !isPlayingAnim &&
+    (live
+      ? currentStep > 0
+      : isPausedAnim
+        ? playTokenCount > 0
+        : currentStep > steerStart)
   const steerAccent = steerTarget === '1' ? STAR1 : STAR5
   const steerAccentBorder = steerTarget === '1' ? STAR1_BORDER : STAR5_BORDER
+  const branchIndex = steerTarget === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
+  const branchReady =
+    steerTarget === '5' ? STEPS_5_THEN_1.length > 0 : STEPS_1_THEN_5.length > 0
+  const showBranchSwitch =
+    !isPreSteer && !branchTaken && branchReady && vizStepIndex === branchIndex
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -646,37 +739,54 @@ export default function CATDemo() {
 
         <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 mb-6 shadow-sm flex flex-wrap items-center gap-3">
           <span className="text-xs font-semibold uppercase tracking-wide text-gray-900">Steer toward</span>
-          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm">
-            <button
-              type="button"
-              onClick={() => onSteerChange('5')}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                steerTarget === '5' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
-              }`}
-              style={steerTarget === '5' ? { background: STAR5, border: `1px solid ${STAR5_BORDER}` } : {}}
-            >
-              ★★★★★ 5-star
-            </button>
-            <button
-              type="button"
-              onClick={() => onSteerChange('1')}
-              disabled={!star1Ready}
-              title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                steerTarget === '1' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
-              }`}
-              style={steerTarget === '1' ? { background: STAR1, border: `1px solid ${STAR1_BORDER}` } : {}}
-            >
-              ★☆☆☆☆ 1-star
-            </button>
-          </div>
-          {!star1Ready && (
-            <span className="text-xs text-gray-900">
-              1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).
-            </span>
-          )}
-          {isPreSteer && (
-            <span className="text-sm text-gray-600">Fixed prompt at <strong>really</strong> (grey on chart). Choose 5★ or 1★ to start steering.</span>
+          {isPreSteer ? (
+            <>
+              <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => onSteerChange('5')}
+                  className="px-4 py-1.5 rounded-md text-sm font-medium transition-colors text-gray-900 hover:bg-gray-50"
+                >
+                  ★★★★★ 5-star
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSteerChange('1')}
+                  disabled={!star1Ready}
+                  title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
+                  className="px-4 py-1.5 rounded-md text-sm font-medium transition-colors text-gray-900 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  ★☆☆☆☆ 1-star
+                </button>
+              </div>
+              {!star1Ready && (
+                <span className="text-xs text-gray-900">
+                  1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).
+                </span>
+              )}
+              <span className="text-sm text-gray-600">Choose 5★ or 1★ to start steering.</span>
+            </>
+          ) : (
+            <>
+              <span className="text-sm font-semibold tracking-tight" style={{ color: steerAccent }}>
+                {branchTaken && branchFromTarget
+                  ? `Steered toward ${starLabel(branchFromTarget)}, now steering to ${starLabel(steerTarget)}`
+                  : `Steering toward ${starLabel(steerTarget)}`}
+              </span>
+              {showBranchSwitch && (
+                <button
+                  type="button"
+                  onClick={onBranchSwitch}
+                  className="px-4 py-1.5 rounded-md text-sm font-semibold text-white shadow-sm transition-colors"
+                  style={{
+                    background: steerTarget === '5' ? STAR1 : STAR5,
+                    border: `1px solid ${steerTarget === '5' ? STAR1_BORDER : STAR5_BORDER}`,
+                  }}
+                >
+                  Steer toward {steerTarget === '5' ? '1-Star' : '5-Star'}
+                </button>
+              )}
+            </>
           )}
         </div>
 
@@ -723,12 +833,13 @@ export default function CATDemo() {
               type="button"
               onClick={() => {
                 if (live) setCurrentStep(s => Math.max(s - 1, 0))
-                else
+                else if (isPausedAnim) {
                   setPlayTokenCount(c => {
-                    const nxt = Math.max(0, c - 1)
-                    if (nxt === 0) setIntroStage('pre')
-                    return nxt
+                    const n = Math.max(0, c - 1)
+                    setCurrentStep(Math.max(0, n - 1))
+                    return n
                   })
+                } else setCurrentStep(s => Math.max(steerStart, s - 1))
               }}
               disabled={!canStepBack}
               className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
@@ -739,13 +850,13 @@ export default function CATDemo() {
               type="button"
               onClick={() => {
                 if (live) setCurrentStep(s => Math.min(s + 1, nSteps - 1))
-                else {
-                  if (introStage === 'pre') {
-                    setIntroStage('prefix')
-                    setPlayPaused(true)
-                  }
-                  setPlayTokenCount(c => Math.min(nSteps, c + 1))
-                }
+                else if (isPausedAnim) {
+                  setPlayTokenCount(c => {
+                    const n = Math.min(nSteps, c + 1)
+                    setCurrentStep(Math.max(0, n - 1))
+                    return n
+                  })
+                } else setCurrentStep(s => Math.min(s + 1, nSteps - 1))
               }}
               disabled={!canStepForward}
               className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
