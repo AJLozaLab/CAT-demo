@@ -13,13 +13,11 @@ const STAR1_SOFT = 'rgba(217, 91, 93, 0.14)'
 const STAR5_BORDER = '#4a72d9'
 const STAR1_BORDER = '#b84a4c'
 
-/** Optional: set `NEXT_PUBLIC_ARXIV_URL` in `.env.local` when the paper is live. */
 const ARXIV_PAPER_URL = 'http://arxiv.org/abs/2605.14004'
 
 const ATTR_THRESHOLD = '0.8'
 const TOKEN_EPSILON = '0.001'
 
-/** Default ms between each new chosen token during Play (editable next to Play). */
 const DEFAULT_TOKEN_REVEAL_MS = 1000
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
