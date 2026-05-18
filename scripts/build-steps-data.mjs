@@ -112,13 +112,11 @@ function buildSteps(dir, starKey) {
     const table = readStepTable(csvPath)
     const norm = t => t.trim()
     const chosenRow =
-      table.find(r => norm(r.token) === norm(chosenToken)) ||
       table.find(r => r.token === chosenToken) ||
+      table.find(r => norm(r.token) === norm(chosenToken)) ||
       table[0]
     if (!chosenRow) continue
-    const chosen_token = chosenRow.token.trim() === chosenToken.trim()
-      ? chosenRow.token.trim()
-      : chosenToken
+    const chosen_token = chosenRow.token
     const promptOnly = isPromptOnlyRow(row)
     steps.push({
       chosen_token,
