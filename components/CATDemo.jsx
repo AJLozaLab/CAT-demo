@@ -1,7 +1,13 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { STEPS_5STAR, STEPS_1STAR, getFixedSteerPromptDisplay } from '@/lib/steps-data'
+import {
+  STEPS_5STAR,
+  STEPS_1STAR,
+  PROMPT_STEPS,
+  getFixedSteerPromptDisplay,
+  countPromptOnlySteps,
+} from '@/lib/steps-data'
 
 // ── Brand colors (5★ vs 1★) ───────────────────────────────────────────────────
 const STAR5 = '#648FFF'
@@ -17,8 +23,12 @@ const ARXIV_PAPER_URL = 'http://arxiv.org/abs/2605.14004'
 
 const ATTR_THRESHOLD = '0.8'
 const TOKEN_EPSILON = '0.001'
+const TOP_K = '20'
 
 const DEFAULT_TOKEN_REVEAL_MS = 1000
+
+const PROMPT_CHART_GREY = '#9ca3af'
+const PROMPT_CHART_GREY_DARK = '#6b7280'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtPct(n) {
@@ -75,13 +85,17 @@ function chartLabelsForSteps(steps) {
   )
 }
 
-/** Concatenate `chosen_token_display` for the first `count` steps (decode after the fixed steering prompt). */
+/** Concatenate steered decode tokens (skips prompt-only I / really). */
 function committedChosenDisplay(steps, count) {
   if (!steps?.length || count <= 0) return ''
-  return steps.slice(0, count).map(s => s.chosen_token_display).join('')
+  return steps
+    .slice(0, count)
+    .filter(s => !s.prompt_only)
+    .map(s => s.chosen_token_display)
+    .join('')
 }
 
-function applyChartStep(chart, stepList, idx, visibleCount) {
+function applyChartStep(chart, stepList, idx, visibleCount, { preSteer = false } = {}) {
   const n = Math.min(Math.max(0, visibleCount), stepList.length)
   if (n === 0) return
   const hi = Math.min(Math.max(0, idx), n - 1)
@@ -94,6 +108,37 @@ function applyChartStep(chart, stepList, idx, visibleCount) {
   chart.data.labels = chartLabelsForSteps(stepList).slice(0, n)
   chart.data.datasets[0].data = star5
   chart.data.datasets[1].data = star1
+
+  if (preSteer) {
+    chart.data.datasets[0].borderColor = PROMPT_CHART_GREY
+    chart.data.datasets[1].borderColor = PROMPT_CHART_GREY
+    chart.data.datasets[0].backgroundColor = 'transparent'
+    chart.data.datasets[1].backgroundColor = 'transparent'
+    chart.data.datasets[0].pointBackgroundColor = Array(n).fill(PROMPT_CHART_GREY)
+    chart.data.datasets[1].pointBackgroundColor = Array(n).fill(PROMPT_CHART_GREY)
+    chart.data.datasets[0].pointBorderColor = Array.from({ length: n }, (_, i) =>
+      i === hi ? PROMPT_CHART_GREY_DARK : '#fff'
+    )
+    chart.data.datasets[1].pointBorderColor = Array.from({ length: n }, (_, i) =>
+      i === hi ? PROMPT_CHART_GREY_DARK : '#fff'
+    )
+    if (chart.options.scales?.x?.ticks) {
+      chart.options.scales.x.ticks.color = PROMPT_CHART_GREY
+    }
+  } else {
+    chart.data.datasets[0].borderColor = STAR5
+    chart.data.datasets[1].borderColor = STAR1
+    chart.data.datasets[0].backgroundColor = STAR5_SOFT
+    chart.data.datasets[1].backgroundColor = STAR1_SOFT
+    chart.data.datasets[0].pointBackgroundColor = STAR5
+    chart.data.datasets[1].pointBackgroundColor = STAR1
+    chart.data.datasets[0].pointBorderColor = '#fff'
+    chart.data.datasets[1].pointBorderColor = '#fff'
+    if (chart.options.scales?.x?.ticks) {
+      chart.options.scales.x.ticks.color = '#374151'
+    }
+  }
+
   chart.data.datasets.forEach(ds => {
     ds.pointRadius      = Array.from({ length: n }, (_, i) => (i === hi ? 8 : i <= hi ? 4 : 0))
     ds.pointHoverRadius = Array.from({ length: n }, (_, i) => (i <= hi ? 6 : 0))
@@ -103,7 +148,7 @@ function applyChartStep(chart, stepList, idx, visibleCount) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function CATDemo() {
-  const [steerTarget, setSteerTarget] = useState('5')
+  const [steerTarget, setSteerTarget] = useState(null) // null until 5★ or 1★ is chosen
   const [introStage, setIntroStage]   = useState('pre') // 'pre' | 'prefix' | 'live'
   const [playTokenCount, setPlayTokenCount] = useState(0)
   const [playPaused, setPlayPaused] = useState(false)
@@ -118,29 +163,35 @@ export default function CATDemo() {
   const prefixTimeoutsRef = useRef([])
   const prefixRunIdRef = useRef(0)
 
-  const steps = useMemo(
-    () => (steerTarget === '5' ? STEPS_5STAR : STEPS_1STAR),
+  const isPreSteer = steerTarget == null
+  const traceSteps = useMemo(
+    () => (steerTarget === '5' ? STEPS_5STAR : steerTarget === '1' ? STEPS_1STAR : []),
     [steerTarget]
   )
+  const steps = isPreSteer ? PROMPT_STEPS : traceSteps
   const hasSteps = steps.length > 0
   const star1Ready = STEPS_1STAR.length > 0
-  const live = introStage === 'live' && hasSteps
-  /** Chart + candidate table: live mode, or Play animation once at least one token is visible. */
+  const live = !isPreSteer && introStage === 'live' && traceSteps.length > 0
+  /** Chart + table: pre-steer prompt view, or once a steer path is selected. */
   const vizActive =
-    hasSteps && (live || (introStage === 'prefix' && playTokenCount > 0))
-  const vizStepIndex = live
-    ? currentStep
-    : introStage === 'prefix'
+    (isPreSteer && PROMPT_STEPS.length > 0) ||
+    (traceSteps.length > 0 &&
+      (live || introStage === 'pre' || (introStage === 'prefix' && playTokenCount > 0)))
+  /** Pre-steer: fixed at last prompt token (really); no stepping through I / really. */
+  const preSteerStepIndex = Math.max(0, PROMPT_STEPS.length - 1)
+  const vizStepIndex = isPreSteer
+    ? preSteerStepIndex
+    : introStage === 'prefix' && playTokenCount > 0
       ? Math.max(0, playTokenCount - 1)
-      : 0
+      : currentStep
   const step = vizActive ? steps[vizStepIndex] : null
 
-  /** How many decode steps are reflected in generated text (x-axis grows with them). */
   const chartVisibleCount = useMemo(() => {
     if (!vizActive || !hasSteps) return 0
-    if (live) return Math.min(steps.length, currentStep + 1)
-    return Math.min(steps.length, playTokenCount)
-  }, [vizActive, hasSteps, live, steps.length, currentStep, playTokenCount])
+    if (isPreSteer) return PROMPT_STEPS.length
+    if (introStage === 'prefix') return Math.min(steps.length, playTokenCount)
+    return Math.min(steps.length, currentStep + 1)
+  }, [vizActive, hasSteps, isPreSteer, introStage, steps.length, currentStep, playTokenCount])
 
   const fixedPrompt = useMemo(() => getFixedSteerPromptDisplay(steps), [steps])
   const { fixedPromptTrimmed, fixedPromptTrailing } = useMemo(() => {
@@ -150,8 +201,20 @@ export default function CATDemo() {
 
   const stepsRef = useRef(steps)
   stepsRef.current = steps
+  const steerTargetRef = useRef(steerTarget)
+  steerTargetRef.current = steerTarget
   const playTokenCountRef = useRef(0)
   playTokenCountRef.current = playTokenCount
+  const currentStepRef = useRef(currentStep)
+  currentStepRef.current = currentStep
+
+  /** playTokenCount so viz index `stepIndex` is the active token (stepIndex is 0-based). */
+  const playCountForStepIndex = stepIndex => stepIndex + 1
+
+  const initialSteerPlayCount = (stepList, stepIndex) => {
+    const steerStart = countPromptOnlySteps(stepList)
+    return Math.max(playCountForStepIndex(steerStart), playCountForStepIndex(stepIndex))
+  }
 
   const resetIntro = useCallback(() => {
     prefixRunIdRef.current += 1
@@ -161,6 +224,7 @@ export default function CATDemo() {
     }
     for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
     prefixTimeoutsRef.current = []
+    setSteerTarget(null)
     setIntroStage('pre')
     setPlayTokenCount(0)
     setPlayPaused(false)
@@ -168,8 +232,20 @@ export default function CATDemo() {
   }, [])
 
   const onSteerChange = next => {
+    prefixRunIdRef.current += 1
+    if (prefixTimerRef.current) {
+      clearInterval(prefixTimerRef.current)
+      prefixTimerRef.current = null
+    }
+    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
+    prefixTimeoutsRef.current = []
+    const targetSteps = next === '5' ? STEPS_5STAR : STEPS_1STAR
+    const startStep = countPromptOnlySteps(targetSteps)
     setSteerTarget(next)
-    resetIntro()
+    setIntroStage('pre')
+    setCurrentStep(startStep)
+    setPlayTokenCount(0)
+    setPlayPaused(false)
   }
 
   // ── Chart.js during Play (per revealed token) and in live walkthrough ───
@@ -254,7 +330,7 @@ export default function CATDemo() {
           },
         })
         chartRef.current = chart
-        applyChartStep(chart, steps, idx, vc)
+        applyChartStep(chart, steps, idx, vc, { preSteer: isPreSteer })
       } catch (err) {
         console.error('Chart init failed', err)
       }
@@ -263,14 +339,14 @@ export default function CATDemo() {
       chart?.destroy()
       if (chartRef.current === chart) chartRef.current = null
     }
-  }, [vizActive, hasSteps, steps, chartVisibleCount])
+  }, [vizActive, hasSteps, steps, chartVisibleCount, isPreSteer, vizStepIndex])
 
   // ── Update chart when step changes ─────────────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current
     if (!chart || !vizActive || chartVisibleCount <= 0) return
-    applyChartStep(chart, steps, vizStepIndex, chartVisibleCount)
-  }, [vizStepIndex, vizActive, steps, chartVisibleCount])
+    applyChartStep(chart, steps, vizStepIndex, chartVisibleCount, { preSteer: isPreSteer })
+  }, [vizStepIndex, vizActive, steps, chartVisibleCount, isPreSteer])
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
   useEffect(() => {
@@ -283,7 +359,7 @@ export default function CATDemo() {
       if (live) {
         if (e.key === 'ArrowRight') setCurrentStep(s => Math.min(s + 1, steps.length - 1))
         if (e.key === 'ArrowLeft') setCurrentStep(s => Math.max(s - 1, 0))
-      } else if (introStage === 'pre' && e.key === 'ArrowRight') {
+      } else if (!isPreSteer && introStage === 'pre' && e.key === 'ArrowRight') {
         setIntroStage('prefix')
         setPlayPaused(true)
         setPlayTokenCount(c => Math.min(steps.length, c + 1))
@@ -300,7 +376,7 @@ export default function CATDemo() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [live, introStage, playPaused, hasSteps, steps.length, resetIntro])
+  }, [live, introStage, playPaused, hasSteps, isPreSteer, steps.length, resetIntro])
 
   const pausePlay = useCallback(() => {
     prefixRunIdRef.current += 1
@@ -322,14 +398,24 @@ export default function CATDemo() {
     const st = stepsRef.current
     const n = st.length
     const ms = Math.max(0, Math.min(5000, Math.round(Number(tokenRevealMs) || 0)))
-    const start = playTokenCountRef.current
+    const start = steerTargetRef.current
+      ? Math.max(
+          playTokenCountRef.current,
+          initialSteerPlayCount(st, currentStepRef.current)
+        )
+      : playTokenCountRef.current
 
     setPlayPaused(false)
 
     const finishToLive = () => {
       if (runId !== prefixRunIdRef.current) return
       setPlayPaused(false)
-      if (hasSteps) {
+      if (!steerTargetRef.current) {
+        setIntroStage('pre')
+        setPlayTokenCount(0)
+        return
+      }
+      if (n > 0) {
         setIntroStage('live')
         setCurrentStep(Math.max(0, n - 1))
         setPlayTokenCount(0)
@@ -343,6 +429,7 @@ export default function CATDemo() {
       return
     }
 
+    setPlayTokenCount(start)
     let count = start
     const revealNext = () => {
       const tid = setTimeout(() => {
@@ -377,7 +464,12 @@ export default function CATDemo() {
     const finishToLive = () => {
       if (runId !== prefixRunIdRef.current) return
       setPlayPaused(false)
-      if (hasSteps) {
+      if (!steerTargetRef.current) {
+        setIntroStage('pre')
+        setPlayTokenCount(0)
+        return
+      }
+      if (n > 0) {
         setIntroStage('live')
         setCurrentStep(Math.max(0, n - 1))
         setPlayTokenCount(0)
@@ -386,16 +478,24 @@ export default function CATDemo() {
       }
     }
 
-    if (!hasSteps || n === 0) {
+    if (n === 0) {
       finishToLive()
       return
     }
 
+    const initialCount = steerTargetRef.current
+      ? initialSteerPlayCount(st, currentStepRef.current)
+      : 0
     setPlayPaused(false)
     setIntroStage('prefix')
-    setPlayTokenCount(0)
+    setPlayTokenCount(initialCount)
 
-    let count = 0
+    if (initialCount >= n) {
+      finishToLive()
+      return
+    }
+
+    let count = initialCount
     const revealNext = () => {
       const tid = setTimeout(() => {
         if (runId !== prefixRunIdRef.current) return
@@ -459,11 +559,15 @@ export default function CATDemo() {
 
   const nSteps = steps.length
   const canStepForward =
+    !isPreSteer &&
     hasSteps &&
     (live ? currentStep < nSteps - 1 : playTokenCount < nSteps && (introStage === 'pre' || (introStage === 'prefix' && playPaused)))
   const canStepBack =
+    !isPreSteer &&
     hasSteps &&
     (live ? currentStep > 0 : playTokenCount > 0 && (introStage !== 'prefix' || playPaused))
+  const steerAccent = steerTarget === '1' ? STAR1 : STAR5
+  const steerAccentBorder = steerTarget === '1' ? STAR1_BORDER : STAR5_BORDER
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -504,6 +608,10 @@ export default function CATDemo() {
                     <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-1.5">Token epsilon</div>
                     <div className="font-mono tabular-nums text-xl font-bold tracking-tight">{TOKEN_EPSILON}</div>
                   </div>
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-1.5">k</div>
+                    <div className="font-mono tabular-nums text-xl font-bold tracking-tight">{TOP_K}</div>
+                  </div>
                 </div>
               </div>
             </aside>
@@ -524,7 +632,10 @@ export default function CATDemo() {
                 {livePriorText ? <ContextText context={livePriorText} /> : null}
                 <span
                   className="inline rounded px-1.5 py-0 font-semibold leading-snug align-baseline"
-                  style={{ background: STAR5_SOFT, color: '#3d5cad' }}
+                  style={{
+                    background: steerTarget === '1' ? STAR1_SOFT : STAR5_SOFT,
+                    color: steerTarget === '1' ? '#a33436' : '#3d5cad',
+                  }}
                 >
                   {renderSpecial(step.chosen_token_display)}
                 </span>
@@ -549,8 +660,9 @@ export default function CATDemo() {
             <button
               type="button"
               onClick={() => onSteerChange('1')}
+              disabled={!star1Ready}
               title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 steerTarget === '1' ? 'text-white shadow-sm' : 'text-gray-900 hover:bg-gray-50'
               }`}
               style={steerTarget === '1' ? { background: STAR1, border: `1px solid ${STAR1_BORDER}` } : {}}
@@ -562,6 +674,9 @@ export default function CATDemo() {
             <span className="text-xs text-gray-900">
               1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).
             </span>
+          )}
+          {isPreSteer && (
+            <span className="text-sm text-gray-600">Fixed prompt at <strong>really</strong> (grey on chart). Choose 5★ or 1★ to start steering.</span>
           )}
         </div>
 
@@ -591,7 +706,7 @@ export default function CATDemo() {
                 else if (isPausedAnim) resumePlay()
                 else playPrefix()
               }}
-              disabled={live && hasSteps}
+              disabled={isPreSteer || (live && hasSteps)}
               className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-35 disabled:cursor-not-allowed"
               style={{ background: '#4b5563', border: '1px solid #374151' }}
             >
@@ -646,7 +761,9 @@ export default function CATDemo() {
                 ? `Playing…${statusPaused}`
                 : !hasSteps
                   ? 'No trace yet'
-                  : 'Press Play'}
+                  : isPreSteer
+                    ? 'At really · choose 5★ or 1★'
+                    : 'Press Play'}
           </div>
         </div>
 
@@ -721,13 +838,13 @@ export default function CATDemo() {
                       <tr
                         key={i}
                         className="transition-colors hover:brightness-95"
-                        style={{ background: 'white', outline: isChosen ? `2px solid ${STAR5}` : 'none', outlineOffset: '-2px' }}
+                        style={{ background: 'white', outline: isChosen ? `2px solid ${steerAccent}` : 'none', outlineOffset: '-2px' }}
                       >
                         <td className="px-5 py-2.5 font-medium font-mono text-gray-800 border-b border-gray-50">
                           <div className="flex items-center gap-2">
                             {renderSpecial(row.token)}
                             {isChosen && (
-                              <span className="text-xs text-white px-1.5 py-0.5 rounded font-semibold" style={{ background: STAR5 }}>
+                              <span className="text-xs text-white px-1.5 py-0.5 rounded font-semibold" style={{ background: steerAccent }}>
                                 chosen
                               </span>
                             )}
@@ -750,6 +867,7 @@ export default function CATDemo() {
             </div>
           </div>
         )}
+
 
         {!hasSteps && (
           <div className="rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center text-gray-900 text-sm font-medium">
