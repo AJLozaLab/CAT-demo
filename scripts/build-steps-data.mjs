@@ -7,6 +7,8 @@ const root = path.join(__dirname, '..')
 const DEFAULT_PROMPT_PREFIX = '<|sos|><|phones|><|sotitle|>Review<|sotext|>'
 const DEMO_PROMPT = '[sos] I really '
 const CHART_PREFIX_LABELS = ['I', 'really']
+/** Match demo satisficing k — keep only top candidates per step in generated data. */
+const TABLE_TOP_K = 20
 
 function parseCsvLine(line) {
   const out = []
@@ -91,6 +93,26 @@ function readStepTable(csvPath) {
   return table
 }
 
+function trimTableForDemo(table, chosenToken, topK = TABLE_TOP_K) {
+  if (!table.length) return table
+  const norm = t => t.trim()
+  const target = norm(chosenToken)
+  const byProb = [...table].sort((a, b) => b.prob - a.prob)
+  const kept = []
+  const seen = new Set()
+  for (const row of byProb) {
+    if (kept.length >= topK) break
+    if (seen.has(row.token)) continue
+    seen.add(row.token)
+    kept.push(row)
+  }
+  const chosenRow =
+    table.find(r => r.token === chosenToken) ||
+    table.find(r => norm(r.token) === target)
+  if (chosenRow && !seen.has(chosenRow.token)) kept.push(chosenRow)
+  return kept.sort((a, b) => b.prob - a.prob)
+}
+
 function displayForChosen(chosenToken, context) {
   if (!chosenToken) return ''
   if (chosenToken.startsWith(' ') || /^[<.,!?;:]/.test(chosenToken)) return chosenToken
@@ -109,15 +131,21 @@ function buildSteps(dir, starKey) {
       continue
     }
     const { chosenToken, context } = tokenFromFilename(row.csvFile, starKey, promptPrefix)
-    const table = readStepTable(csvPath)
+    const fullTable = readStepTable(csvPath)
     const norm = t => t.trim()
     const chosenRow =
-      table.find(r => r.token === chosenToken) ||
-      table.find(r => norm(r.token) === norm(chosenToken)) ||
-      table[0]
+      fullTable.find(r => r.token === chosenToken) ||
+      fullTable.find(r => norm(r.token) === norm(chosenToken)) ||
+      fullTable[0]
     if (!chosenRow) continue
     const chosen_token = chosenRow.token
+    const table = trimTableForDemo(fullTable, chosen_token)
     const promptOnly = isPromptOnlyRow(row)
+    if (fullTable.length > table.length) {
+      console.log(
+        `  trimmed ${row.csvFile}: ${fullTable.length} → ${table.length} rows`
+      )
+    }
     steps.push({
       chosen_token,
       chosen_token_display: displayForChosen(chosenRow.token.trim() === chosenToken ? chosenRow.token : chosenToken, context),

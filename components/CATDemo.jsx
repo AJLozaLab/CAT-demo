@@ -31,8 +31,11 @@ const ARXIV_PAPER_URL = 'http://arxiv.org/abs/2605.14004'
 const ATTR_THRESHOLD = '0.8'
 const TOKEN_EPSILON = '0.001'
 const TOP_K = '20'
+const TABLE_TOP_K = 20
 
 const DEFAULT_TOKEN_REVEAL_MS = 1000
+
+const EMPTY_TRACE = []
 
 const PROMPT_CHART_GREY = '#9ca3af'
 const PROMPT_CHART_GREY_DARK = '#6b7280'
@@ -73,8 +76,7 @@ function isSpecialToken(token) {
 function renderSpecial(token) {
   const t = token.trim()
   if (isSpecialToken(t)) return <SpecialTokenBadge token={token} />
-  if (token.trim() === '') return <>{token}</>
-  return <>{token}</>
+  return <span className="whitespace-pre-wrap">{token}</span>
 }
 
 // Parse a context string, rendering any embedded special tokens as badges
@@ -147,6 +149,7 @@ function SelectionReasonHint({ explanation, accent }) {
 
   const tooltip =
     open &&
+    typeof document !== 'undefined' &&
     createPortal(
       <div
         role="tooltip"
@@ -162,7 +165,7 @@ function SelectionReasonHint({ explanation, accent }) {
     )
 
   return (
-    <>
+    <span className="inline-flex items-center">
       <button
         ref={btnRef}
         type="button"
@@ -177,7 +180,7 @@ function SelectionReasonHint({ explanation, accent }) {
         ?
       </button>
       {tooltip}
-    </>
+    </span>
   )
 }
 
@@ -234,13 +237,22 @@ function chartBoundaryBefore(chart, index, towardNext = 0.9) {
   return prevX + (nextX - prevX) * towardNext
 }
 
-function drawChartGuideLabel(ctx, text, x, y, { align = 'center', color = '#4b5563' } = {}) {
+function drawChartGuideLabel(
+  ctx,
+  text,
+  x,
+  y,
+  { align = 'center', color = '#4b5563', lineHeight = 12 } = {}
+) {
+  const lines = String(text).split('\n')
   ctx.save()
-  ctx.font = '600 10px var(--font-sans), Inter, system-ui, sans-serif'
+  ctx.font = GUIDE_LABEL_FONT
   ctx.fillStyle = color
   ctx.textAlign = align
   ctx.textBaseline = 'bottom'
-  ctx.fillText(text, x, y)
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], x, y - (lines.length - 1 - i) * lineHeight)
+  }
   ctx.restore()
 }
 
@@ -258,29 +270,109 @@ function drawChartVLine(ctx, x, top, bottom, color, dashed = true) {
 
 let steerChartPluginRegistered = false
 
-const REGION_LABEL_MARGIN = 20
+const REGION_LABEL_MARGIN = 12
+const REGION_LABEL_LINE_HEIGHT = 12
+const REGION_LABEL_MIN_GAP = 8
+/** Fixed token slots for label centering at the left edge of a region (labels do not shift on reveal). */
+const REGION_LABEL_MAX_TOKENS = 5
+const CHART_LABEL_TOP_PAD_PROMPT_ONLY = 28
+const CHART_LABEL_TOP_PAD_SINGLE_STEER = 40
+const CHART_LABEL_TOP_PAD_BRANCH = 72
 
-function drawRegionLabel(ctx, text, range, chartArea, { color = '#4b5563' } = {}) {
-  if (!range || !text) return
-  const x = Math.min(
-    Math.max(range.left + REGION_LABEL_MARGIN, chartArea.left),
-    chartArea.right
-  )
-  drawChartGuideLabel(ctx, text, x, chartArea.top - 6, { align: 'left', color })
+function chartRegionLabelTopPad(cfg = {}) {
+  if (cfg.preSteer || (cfg.promptEndIndex ?? 0) <= 0) return CHART_LABEL_TOP_PAD_PROMPT_ONLY
+  if (
+    cfg.branchTaken &&
+    cfg.branchIndex != null &&
+    cfg.branchIndex > (cfg.promptEndIndex ?? 0) &&
+    cfg.steerTarget
+  ) {
+    return CHART_LABEL_TOP_PAD_BRANCH
+  }
+  return CHART_LABEL_TOP_PAD_SINGLE_STEER
+}
+
+const GUIDE_LABEL_FONT = '600 10px var(--font-sans), Inter, system-ui, sans-serif'
+
+function measureGuideLabel(ctx, text) {
+  const lines = String(text).split('\n')
+  ctx.save()
+  ctx.font = GUIDE_LABEL_FONT
+  let width = 0
+  for (const line of lines) {
+    width = Math.max(width, ctx.measureText(line).width)
+  }
+  ctx.restore()
+  return {
+    lines,
+    width,
+    height: lines.length * REGION_LABEL_LINE_HEIGHT,
+  }
+}
+
+function labelBounds(layout) {
+  const left = layout.align === 'center' ? layout.x - layout.width / 2 : layout.x
+  return { left, right: left + layout.width, top: layout.y - layout.height, bottom: layout.y }
+}
+
+/** Left-anchored span for region labels (fixed index window, independent of reveal). */
+function chartLabelPlacementSpan(chart, fromIndex, slotCount, maxTokens = REGION_LABEL_MAX_TOKENS) {
+  const end = Math.min(fromIndex + maxTokens, slotCount)
+  if (end <= fromIndex) return null
+  return chartAlignedSpan(chart, fromIndex, end)
+}
+
+/** Place label in region (centered when it fits); resolve horizontal overlap by stacking upward. */
+function layoutRegionLabels(ctx, plans, chartArea) {
+  const baseY = chartArea.top - 6
+  const layouts = plans
+    .filter(p => p.range && p.text)
+    .map(plan => {
+      const { width, height } = measureGuideLabel(ctx, plan.text)
+      const xCenter = (plan.range.left + plan.range.right) / 2
+      const half = width / 2
+      const x = Math.max(chartArea.left + half, Math.min(xCenter, chartArea.right - half))
+      return { ...plan, width, height, x, align: 'center', y: baseY }
+    })
+
+  for (let i = 1; i < layouts.length; i++) {
+    const cur = layouts[i]
+    cur.y = baseY
+    for (let j = 0; j < i; j++) {
+      const prev = layouts[j]
+      const a = labelBounds(prev)
+      const b = labelBounds(cur)
+      if (b.left < a.right + REGION_LABEL_MIN_GAP) {
+        cur.y = Math.min(cur.y, prev.y - prev.height - REGION_LABEL_MIN_GAP)
+      }
+    }
+  }
+
+  for (const layout of layouts) {
+    drawChartGuideLabel(ctx, layout.text, layout.x, layout.y, {
+      align: layout.align,
+      color: layout.color,
+      lineHeight: REGION_LABEL_LINE_HEIGHT,
+    })
+  }
 }
 
 function drawSteerRegionGuides(chart, cfg) {
   const { ctx, chartArea } = chart
   const { top, bottom } = chartArea
   const slotCount = cfg.slotCount ?? chart.scales.x.ticks?.length ?? 0
+  const labelPlans = []
 
   const promptLabelRange =
     cfg.promptEndIndex > 0 ? chartAlignedSpan(chart, 0, cfg.promptEndIndex) : null
   if (promptLabelRange) {
-    drawRegionLabel(ctx, 'Prompt', promptLabelRange, chartArea, { color: '#6b7280' })
+    labelPlans.push({ text: 'Prompt', range: promptLabelRange, color: '#6b7280' })
   }
 
-  if (cfg.preSteer || cfg.promptEndIndex <= 0) return
+  if (cfg.preSteer || cfg.promptEndIndex <= 0) {
+    layoutRegionLabels(ctx, labelPlans, chartArea)
+    return
+  }
 
   const firstSteerTarget = cfg.firstSteerTarget ?? cfg.steerTarget
   const firstSteerColor = firstSteerTarget === '1' ? STAR1 : STAR5
@@ -295,39 +387,35 @@ function drawSteerRegionGuides(chart, cfg) {
   ) {
     const firstSteerLabelRange = chartAlignedSpan(chart, cfg.promptEndIndex, cfg.branchIndex)
     if (firstSteerLabelRange) {
-      drawRegionLabel(
-        ctx,
-        `Steering toward ${starLabel(firstSteerTarget)}`,
-        firstSteerLabelRange,
-        chartArea,
-        { color: firstSteerColor }
-      )
+      labelPlans.push({
+        text: `Steering\ntoward\n${starLabel(firstSteerTarget)}`,
+        range: firstSteerLabelRange,
+        color: firstSteerColor,
+      })
     }
     const branchX = chartBoundaryBefore(chart, cfg.branchIndex)
     const afterColor = cfg.steerTarget === '1' ? STAR1 : STAR5
     drawChartVLine(ctx, branchX, top, bottom, afterColor, true)
-    const branchLabelRange = chartAlignedSpan(chart, cfg.branchIndex, slotCount)
+    const branchLabelRange = chartLabelPlacementSpan(chart, cfg.branchIndex, slotCount)
     if (branchLabelRange) {
-      drawRegionLabel(
-        ctx,
-        `Steer back toward ${starLabel(cfg.steerTarget)}`,
-        branchLabelRange,
-        chartArea,
-        { color: afterColor }
-      )
+      labelPlans.push({
+        text: `Steer back\ntoward\n${starLabel(cfg.steerTarget)}`,
+        range: branchLabelRange,
+        color: afterColor,
+      })
     }
   } else {
-    const steerLabelRange = chartAlignedSpan(chart, cfg.promptEndIndex, slotCount)
+    const steerLabelRange = chartLabelPlacementSpan(chart, cfg.promptEndIndex, slotCount)
     if (steerLabelRange) {
-      drawRegionLabel(
-        ctx,
-        `Steering toward ${starLabel(firstSteerTarget)}`,
-        steerLabelRange,
-        chartArea,
-        { color: firstSteerColor }
-      )
+      labelPlans.push({
+        text: `Steering\ntoward\n${starLabel(firstSteerTarget)}`,
+        range: steerLabelRange,
+        color: firstSteerColor,
+      })
     }
   }
+
+  layoutRegionLabels(ctx, labelPlans, chartArea)
 }
 
 function registerSteerChartPlugin(Chart) {
@@ -525,6 +613,23 @@ function applyChartStep(
     chart.options.scales.x.ticks.autoSkip = false
   }
 
+  const regionPad = chartRegionLabelTopPad({
+    preSteer,
+    promptEndIndex,
+    steerTarget,
+    branchTaken,
+    branchIndex,
+  })
+  if (!chart.options.layout) chart.options.layout = {}
+  const pad = chart.options.layout.padding
+  if (typeof pad === 'number') {
+    chart.options.layout.padding = { top: regionPad, right: pad, bottom: pad, left: pad }
+  } else if (pad && typeof pad === 'object') {
+    pad.top = regionPad
+  } else {
+    chart.options.layout.padding = { top: regionPad }
+  }
+
   chart.update('none')
 }
 
@@ -553,7 +658,8 @@ export default function CATDemo() {
 
   const isPreSteer = controlMethod == null
   const noSteerReady = STEPS_NO_STEERING.length > 0
-  const traceSteps = activeTrace ?? []
+  const traceSteps = activeTrace ?? EMPTY_TRACE
+  const traceKey = controlMethod ?? 'pre'
   const steps = isPreSteer ? PROMPT_STEPS : traceSteps
   const hasSteps = steps.length > 0
   const star1Ready = STEPS_1STAR.length > 0
@@ -799,7 +905,7 @@ export default function CATDemo() {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
-            layout: { padding: { top: 22 } },
+            layout: { padding: { top: CHART_LABEL_TOP_PAD_SINGLE_STEER } },
             scales: {
               x: {
                 ticks: {
@@ -1067,12 +1173,28 @@ export default function CATDemo() {
   }, [step])
 
   const sortedRows = useMemo(() => {
-    if (!step) return []
-    return [...step.table].sort((a, b) => {
-      const va = a[sortCol], vb = b[sortCol]
-      if (typeof va === 'string') return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
-      return sortDir === 'asc' ? va - vb : vb - va
-    })
+    if (!step?.table?.length) return []
+    const chosen = step.chosen_token
+    const sorted = step.table
+      .map((row, index) => ({ row, index }))
+      .sort((a, b) => {
+        const va = a.row[sortCol]
+        const vb = b.row[sortCol]
+        let cmp = 0
+        if (typeof va === 'string') {
+          cmp = va < vb ? -1 : va > vb ? 1 : 0
+        } else {
+          cmp = va - vb
+        }
+        if (cmp === 0) cmp = a.index - b.index
+        return sortDir === 'asc' ? cmp : -cmp
+      })
+      .map(({ row }) => row)
+    if (sorted.length <= TABLE_TOP_K) return sorted
+    const top = sorted.slice(0, TABLE_TOP_K)
+    if (top.some(r => r.token === chosen)) return top
+    const chosenRow = sorted.find(r => r.token === chosen)
+    return chosenRow ? [...top.slice(0, TABLE_TOP_K - 1), chosenRow] : top
   }, [step, sortCol, sortDir])
 
   const handleSort = col => {
@@ -1449,21 +1571,21 @@ export default function CATDemo() {
                     const bg5    = cellBg(colNorm(row.star5, min5,    max5),    STAR5)
                     return (
                       <tr
-                        key={i}
+                        key={`${row.token}-${i}`}
                         className="transition-colors hover:brightness-95"
                         style={{ background: 'white', outline: isChosen ? `2px solid ${steerAccent}` : 'none', outlineOffset: '-2px' }}
                       >
                         <td className="relative px-5 py-2.5 font-medium font-mono text-gray-800 border-b border-gray-50">
                           <div className="flex items-center gap-2">
                             {renderSpecial(row.token)}
-                            {isChosen && (
-                              <>
+                            {isChosen ? (
+                              <span className="inline-flex items-center gap-2 shrink-0">
                                 <span className="text-xs text-white px-1.5 py-0.5 rounded font-semibold" style={{ background: steerAccent }}>
                                   chosen
                                 </span>
                                 <SelectionReasonHint explanation={step.explanation} accent={steerAccent} />
-                              </>
-                            )}
+                              </span>
+                            ) : null}
                           </div>
                         </td>
                         <td className="px-5 py-2.5 text-right font-mono tabular-nums text-gray-700 border-b border-gray-50" style={{ background: bgProb }}>
