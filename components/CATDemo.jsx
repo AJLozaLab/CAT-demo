@@ -237,6 +237,18 @@ function fillChartRect(ctx, left, top, right, bottom, chartArea) {
   ctx.fillRect(l, top, r - l, bottom - top)
 }
 
+/** Yellow backdrop on the active x-axis tick (uses Chart.js label layout). */
+function configureXTickHighlight(chart, activeIndex) {
+  const ticks = chart.options.scales?.x?.ticks
+  if (!ticks) return
+  const isActive = ctx =>
+    ctx.index === activeIndex && !!chart.data.labels?.[ctx.index]
+  ticks.color = '#000000'
+  ticks.showLabelBackdrop = isActive
+  ticks.backdropColor = ctx => (isActive(ctx) ? LAST_ADDED_HIGHLIGHT : undefined)
+  ticks.backdropPadding = { top: 3, bottom: 3, left: 6, right: 6 }
+}
+
 /** X at category `index` from laid-out points (falls back to scale ticks). */
 function chartStepCenterX(chart, index) {
   const el = chart.getDatasetMeta(0)?.data?.[index]
@@ -627,9 +639,7 @@ function applyChartStep(
       chart.data.datasets[1],
       pointStyleArrays(PROMPT_CHART_GREY, PROMPT_CHART_GREY_DARK)
     )
-    if (chart.options.scales?.x?.ticks) {
-      chart.options.scales.x.ticks.color = PROMPT_CHART_GREY
-    }
+    configureXTickHighlight(chart, hi)
   } else {
     chart.data.datasets[0].borderColor = STAR5
     chart.data.datasets[1].borderColor = STAR1
@@ -637,9 +647,7 @@ function applyChartStep(
     chart.data.datasets[1].backgroundColor = STAR1_SOFT
     Object.assign(chart.data.datasets[0], pointStyleArrays(STAR5, STAR5))
     Object.assign(chart.data.datasets[1], pointStyleArrays(STAR1, STAR1))
-    if (chart.options.scales?.x?.ticks) {
-      chart.options.scales.x.ticks.color = '#374151'
-    }
+    configureXTickHighlight(chart, hi)
   }
 
   chart.data.datasets.forEach(ds => {
@@ -986,9 +994,11 @@ export default function CATDemo() {
             scales: {
               x: {
                 ticks: {
-                  color: '#374151',
+                  color: '#000000',
                   maxRotation: 45,
                   autoSkip: false,
+                  showLabelBackdrop: false,
+                  backdropPadding: 6,
                   font: { family: 'JetBrains Mono, monospace', size: 11 },
                   callback(_value, index) {
                     const label = this.chart?.data?.labels?.[index]
@@ -1358,7 +1368,7 @@ export default function CATDemo() {
                   We show that Conditional Attribute Transformers achieve <span className='font-bold'>state-of-the-art performance</span> in reinforcement learning tasks and language modeling. In medical foundation models, they enable dynamic, interpretable risk estimation for downstream clinical outcomes and elucidate the tokens that drive risk, while achieving a <span className='font-bold'>10<sup>8</sup>× speedup over traditional sampling-based approaches</span>. As an additional benefit, we find that this joint task <span className='font-bold'>improves next-token prediction</span> in baseline language models.
                 </p>
             <p>
-                  The demo below shows how Conditional Attribute Transformers can be used to steer a language model toward 1★ or 5★ reviews, and how they can be used to sample tokens from the next-token distribution without attribute steering. This is not a live demo, but rather a number of trajectories that can be explored.
+                  The demo below shows how Conditional Attribute Transformers can be used to steer a language model toward 1★ or 5★ reviews, and how they can be used to sample tokens from the next-token and attribute distributions. This is not a live demo, but rather a number of precomputed trajectories that can be explored.
             </p>
           </div>
         </div>
@@ -1461,61 +1471,63 @@ export default function CATDemo() {
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={resetIntro}
-                className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm"
-              >
-                ↺ Reset
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (live) setCurrentStep(s => Math.max(s - 1, 0))
-                  else if (isPausedAnim) {
-                    setPlayTokenCount(c => {
-                      const n = Math.max(0, c - 1)
-                      setCurrentStep(Math.max(0, n - 1))
-                      return n
-                    })
-                  } else setCurrentStep(s => Math.max(steerStart, s - 1))
-                }}
-                disabled={!canStepBack}
-                className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                ← Back
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (live) setCurrentStep(s => Math.min(s + 1, nSteps - 1))
-                  else if (isPausedAnim) {
-                    setPlayTokenCount(c => {
-                      const n = Math.min(nSteps, c + 1)
-                      setCurrentStep(Math.max(0, n - 1))
-                      return n
-                    })
-                  } else setCurrentStep(s => Math.min(s + 1, nSteps - 1))
-                }}
-                disabled={!canStepForward}
-                className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{ background: STAR5, border: `1px solid ${STAR5_BORDER}` }}
-              >
-                Next →
-              </button>
-              {showBranchSwitch && (
+              <div className="relative flex shrink-0 items-center gap-2">
+                {showBranchSwitch && (
+                  <button
+                    type="button"
+                    onClick={onBranchSwitch}
+                    className="absolute right-full top-1/2 z-10 mr-2 -translate-y-1/2 whitespace-nowrap px-4 py-1.5 rounded-md text-sm font-semibold text-white shadow-sm transition-colors"
+                    style={{
+                      background: steerTarget === '5' ? STAR1 : STAR5,
+                      border: `1px solid ${steerTarget === '5' ? STAR1_BORDER : STAR5_BORDER}`,
+                    }}
+                  >
+                    Steer back toward {steerTarget === '5' ? starLabel('1') : starLabel('5')}
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={onBranchSwitch}
-                  className="px-4 py-1.5 rounded-md text-sm font-semibold text-white shadow-sm transition-colors"
-                  style={{
-                    background: steerTarget === '5' ? STAR1 : STAR5,
-                    border: `1px solid ${steerTarget === '5' ? STAR1_BORDER : STAR5_BORDER}`,
-                  }}
+                  onClick={resetIntro}
+                  className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm"
                 >
-                  Steer back toward {steerTarget === '5' ? starLabel('1') : starLabel('5')}
+                  ↺ Reset
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (live) setCurrentStep(s => Math.max(s - 1, 0))
+                    else if (isPausedAnim) {
+                      setPlayTokenCount(c => {
+                        const n = Math.max(0, c - 1)
+                        setCurrentStep(Math.max(0, n - 1))
+                        return n
+                      })
+                    } else setCurrentStep(s => Math.max(steerStart, s - 1))
+                  }}
+                  disabled={!canStepBack}
+                  className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  ← Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (live) setCurrentStep(s => Math.min(s + 1, nSteps - 1))
+                    else if (isPausedAnim) {
+                      setPlayTokenCount(c => {
+                        const n = Math.min(nSteps, c + 1)
+                        setCurrentStep(Math.max(0, n - 1))
+                        return n
+                      })
+                    } else setCurrentStep(s => Math.min(s + 1, nSteps - 1))
+                  }}
+                  disabled={!canStepForward}
+                  className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{ background: STAR5, border: `1px solid ${STAR5_BORDER}` }}
+                >
+                  Next →
+                </button>
+              </div>
               <span className="text-sm text-gray-900 font-mono font-medium shrink-0 ml-1">
               {vizActive
                 ? `Step ${vizStepIndex + 1} / ${steps.length}${statusPaused}`
