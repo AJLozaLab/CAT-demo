@@ -518,6 +518,13 @@ function starLabel(target) {
   return target === '5' ? '5-Star' : '1-Star'
 }
 
+/** Default table sort: ascending on the attribute being steered toward. */
+function defaultTableSort(steerTarget) {
+  if (steerTarget === '5') return { col: 'star5', dir: 'asc' }
+  if (steerTarget === '1') return { col: 'star1', dir: 'asc' }
+  return { col: 'prob', dir: 'desc' }
+}
+
 function committedChosenDisplay(steps, count) {
   if (!steps?.length || count <= 0) return ''
   return steps
@@ -586,18 +593,39 @@ function applyChartStep(
   chart.data.datasets[1].data = star1
   const n = capacity
 
+  const lastSegmentDash = ctx => {
+    if (ctx.p1DataIndex !== hi || ctx.p0.skip || ctx.p1.skip) return undefined
+    return [6, 4]
+  }
+
+  const pointStyleArrays = (fillColor, ringColor) => ({
+    pointBackgroundColor: Array.from({ length: n }, (_, i) => {
+      if (i > hi || i >= revealed) return fillColor
+      if (i === hi) return '#ffffff'
+      return fillColor
+    }),
+    pointBorderColor: Array.from({ length: n }, (_, i) => {
+      if (i > hi || i >= revealed) return '#fff'
+      if (i === hi) return ringColor
+      return '#fff'
+    }),
+    pointBorderWidth: Array.from({ length: n }, (_, i) =>
+      i === hi && i <= hi && i < revealed ? 2.5 : 1.5
+    ),
+  })
+
   if (preSteer) {
     chart.data.datasets[0].borderColor = PROMPT_CHART_GREY
     chart.data.datasets[1].borderColor = PROMPT_CHART_GREY
     chart.data.datasets[0].backgroundColor = 'transparent'
     chart.data.datasets[1].backgroundColor = 'transparent'
-    chart.data.datasets[0].pointBackgroundColor = Array(n).fill(PROMPT_CHART_GREY)
-    chart.data.datasets[1].pointBackgroundColor = Array(n).fill(PROMPT_CHART_GREY)
-    chart.data.datasets[0].pointBorderColor = Array.from({ length: n }, (_, i) =>
-      i === hi ? PROMPT_CHART_GREY_DARK : '#fff'
+    Object.assign(
+      chart.data.datasets[0],
+      pointStyleArrays(PROMPT_CHART_GREY, PROMPT_CHART_GREY_DARK)
     )
-    chart.data.datasets[1].pointBorderColor = Array.from({ length: n }, (_, i) =>
-      i === hi ? PROMPT_CHART_GREY_DARK : '#fff'
+    Object.assign(
+      chart.data.datasets[1],
+      pointStyleArrays(PROMPT_CHART_GREY, PROMPT_CHART_GREY_DARK)
     )
     if (chart.options.scales?.x?.ticks) {
       chart.options.scales.x.ticks.color = PROMPT_CHART_GREY
@@ -607,16 +635,15 @@ function applyChartStep(
     chart.data.datasets[1].borderColor = STAR1
     chart.data.datasets[0].backgroundColor = STAR5_SOFT
     chart.data.datasets[1].backgroundColor = STAR1_SOFT
-    chart.data.datasets[0].pointBackgroundColor = STAR5
-    chart.data.datasets[1].pointBackgroundColor = STAR1
-    chart.data.datasets[0].pointBorderColor = '#fff'
-    chart.data.datasets[1].pointBorderColor = '#fff'
+    Object.assign(chart.data.datasets[0], pointStyleArrays(STAR5, STAR5))
+    Object.assign(chart.data.datasets[1], pointStyleArrays(STAR1, STAR1))
     if (chart.options.scales?.x?.ticks) {
       chart.options.scales.x.ticks.color = '#374151'
     }
   }
 
   chart.data.datasets.forEach(ds => {
+    ds.segment = { borderDash: lastSegmentDash }
     ds.pointRadius = Array.from({ length: n }, (_, i) =>
       i > hi || i >= revealed ? 0 : i === hi ? 8 : 4
     )
@@ -678,6 +705,12 @@ export default function CATDemo() {
   const [sortCol, setSortCol]         = useState('prob')
   const [sortDir, setSortDir]         = useState('desc')
   const [tokenRevealMs, setTokenRevealMs] = useState(DEFAULT_TOKEN_REVEAL_MS)
+
+  useEffect(() => {
+    const { col, dir } = defaultTableSort(steerTarget)
+    setSortCol(col)
+    setSortDir(dir)
+  }, [steerTarget, controlMethod])
 
   const canvasRef      = useRef(null)
   const chartRef       = useRef(null)
@@ -1350,78 +1383,126 @@ export default function CATDemo() {
           </div>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 mb-6 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-3">Control</div>
-          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Steer toward</div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => onSteerChange('1')}
-              disabled={!star1Ready}
-              title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
-              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${
-                steerTarget === '1'
-                  ? 'font-semibold text-white'
-                  : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
-              }`}
-              style={
-                steerTarget === '1'
-                  ? { background: STAR1, borderColor: STAR1_BORDER }
-                  : undefined
-              }
-            >
-              ★☆☆☆☆ 1-star
-            </button>
-            <button
-              type="button"
-              onClick={() => onSteerChange('5')}
-              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
-                steerTarget === '5'
-                  ? 'font-semibold text-white'
-                  : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
-              }`}
-              style={
-                steerTarget === '5'
-                  ? { background: STAR5, borderColor: STAR5_BORDER }
-                  : undefined
-              }
-            >
-              ★★★★★ 5-star
-            </button>
-            <button
-              type="button"
-              onClick={onNoSteerChange}
-              disabled={!noSteerReady}
-              title={!noSteerReady ? 'Add STEPS_NO_STEERING in lib/steps-data.js' : 'Sample without attribute steering'}
-              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${
-                controlMethod === 'none'
-                  ? 'border-gray-400 bg-gray-100 text-gray-900 font-semibold'
-                  : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
-              }`}
-            >
-              No steering
-            </button>
-          </div>
-          {!star1Ready && isPreSteer && (
-            <p className="mt-2 text-xs text-gray-900">
-              1★ tables: plug in data in <code className="text-[11px]">lib/steps-data.js</code> (<code className="text-[11px]">STEPS_1STAR</code>).
-            </p>
-          )}
-          {controlMethod == null ? (
-            <p className="mt-2 text-sm text-gray-600">
-              Choose 1★, 5★, or no steering to explore next-token and attribute probabilities.
-            </p>
-          ) : controlMethod === 'none' ? (
-            <p className="mt-2 text-sm text-gray-600">
-              Tokens sampled from the next-token distribution without attribute steering.
-            </p>
-          ) : (
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <span className="text-sm font-semibold tracking-tight" style={{ color: steerAccent }}>
-                {branchTaken && branchFromTarget
-                  ? `Steered toward ${starLabel(branchFromTarget)}, now steering to ${starLabel(steerTarget)}`
-                  : `Steering toward ${starLabel(steerTarget)}`}
-              </span>
+        <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 mb-6 shadow-sm space-y-3">
+          <p className="text-sm text-gray-900 leading-relaxed">
+            <span className="font-semibold">Control:</span>{' '}
+            {controlMethod == null ? (
+              <>
+                Choose 1★, 5★, or no steering to explore next-token and attribute probabilities.
+                {!star1Ready && (
+                  <>
+                    {' '}
+                    (1★ data: add <code className="text-[11px]">STEPS_1STAR</code> in{' '}
+                    <code className="text-[11px]">lib/steps-data.js</code>.)
+                  </>
+                )}
+              </>
+            ) : controlMethod === 'none' ? (
+              'No steering — tokens sampled from the next-token distribution without attribute steering.'
+            ) : branchTaken && branchFromTarget ? (
+              <>
+                Steered toward {starLabel(branchFromTarget)}, now steering to{' '}
+                <span style={{ color: steerAccent }}>{starLabel(steerTarget)}</span>.
+              </>
+            ) : (
+              <>
+                Steering toward <span style={{ color: steerAccent }}>{starLabel(steerTarget)}</span>.
+              </>
+            )}
+          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onSteerChange('1')}
+                disabled={!star1Ready}
+                title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
+                className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${
+                  steerTarget === '1'
+                    ? 'font-semibold text-white'
+                    : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
+                }`}
+                style={
+                  steerTarget === '1'
+                    ? { background: STAR1, borderColor: STAR1_BORDER }
+                    : undefined
+                }
+              >
+                ★☆☆☆☆ 1-star
+              </button>
+              <button
+                type="button"
+                onClick={() => onSteerChange('5')}
+                className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
+                  steerTarget === '5'
+                    ? 'font-semibold text-white'
+                    : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
+                }`}
+                style={
+                  steerTarget === '5'
+                    ? { background: STAR5, borderColor: STAR5_BORDER }
+                    : undefined
+                }
+              >
+                ★★★★★ 5-star
+              </button>
+              <button
+                type="button"
+                onClick={onNoSteerChange}
+                disabled={!noSteerReady}
+                title={!noSteerReady ? 'Add STEPS_NO_STEERING in lib/steps-data.js' : 'Sample without attribute steering'}
+                className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${
+                  controlMethod === 'none'
+                    ? 'border-gray-400 bg-gray-100 text-gray-900 font-semibold'
+                    : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                No steering
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={resetIntro}
+                className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm"
+              >
+                ↺ Reset
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (live) setCurrentStep(s => Math.max(s - 1, 0))
+                  else if (isPausedAnim) {
+                    setPlayTokenCount(c => {
+                      const n = Math.max(0, c - 1)
+                      setCurrentStep(Math.max(0, n - 1))
+                      return n
+                    })
+                  } else setCurrentStep(s => Math.max(steerStart, s - 1))
+                }}
+                disabled={!canStepBack}
+                className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                ← Back
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (live) setCurrentStep(s => Math.min(s + 1, nSteps - 1))
+                  else if (isPausedAnim) {
+                    setPlayTokenCount(c => {
+                      const n = Math.min(nSteps, c + 1)
+                      setCurrentStep(Math.max(0, n - 1))
+                      return n
+                    })
+                  } else setCurrentStep(s => Math.min(s + 1, nSteps - 1))
+                }}
+                disabled={!canStepForward}
+                className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{ background: STAR5, border: `1px solid ${STAR5_BORDER}` }}
+              >
+                Next →
+              </button>
               {showBranchSwitch && (
                 <button
                   type="button"
@@ -1435,106 +1516,20 @@ export default function CATDemo() {
                   Steer back toward {steerTarget === '5' ? starLabel('1') : starLabel('5')}
                 </button>
               )}
-            </div>
-          )}
-        </div>
-
-        {/* Controls */}
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Token delay — hidden for now
-            <label className="flex items-center gap-2 text-sm text-gray-900 font-medium">
-              <span className="whitespace-nowrap">Token delay (ms)</span>
-              <input
-                type="number"
-                min={0}
-                max={5000}
-                step={50}
-                value={tokenRevealMs}
-                disabled={introStage === 'prefix' && !playPaused}
-                onChange={e => {
-                  const v = parseInt(e.target.value, 10)
-                  setTokenRevealMs(Number.isFinite(v) ? Math.max(0, Math.min(5000, v)) : DEFAULT_TOKEN_REVEAL_MS)
-                }}
-                className="w-24 rounded-md border border-gray-300 px-2 py-1.5 font-mono text-sm tabular-nums disabled:opacity-50"
-              />
-            </label>
-            */}
-            {/* Play / Pause / Resume — hidden for now
-            <button
-              type="button"
-              onClick={() => {
-                if (isPlayingAnim) pausePlay()
-                else if (isPausedAnim) resumePlay()
-                else playPrefix()
-              }}
-              disabled={isPreSteer || (live && hasSteps)}
-              className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-35 disabled:cursor-not-allowed"
-              style={{ background: '#4b5563', border: '1px solid #374151' }}
-            >
-              {isPlayingAnim ? '⏸ Pause' : isPausedAnim ? '▶ Resume' : '▶ Play'}
-            </button>
-            */}
-            <button
-              type="button"
-              onClick={resetIntro}
-              className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm"
-            >
-              ↺ Reset
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (live) setCurrentStep(s => Math.max(s - 1, 0))
-                else if (isPausedAnim) {
-                  setPlayTokenCount(c => {
-                    const n = Math.max(0, c - 1)
-                    setCurrentStep(Math.max(0, n - 1))
-                    return n
-                  })
-                } else setCurrentStep(s => Math.max(steerStart, s - 1))
-              }}
-              disabled={!canStepBack}
-              className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              ← Back
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (live) setCurrentStep(s => Math.min(s + 1, nSteps - 1))
-                else if (isPausedAnim) {
-                  setPlayTokenCount(c => {
-                    const n = Math.min(nSteps, c + 1)
-                    setCurrentStep(Math.max(0, n - 1))
-                    return n
-                  })
-                } else setCurrentStep(s => Math.min(s + 1, nSteps - 1))
-              }}
-              disabled={!canStepForward}
-              className="px-4 py-2 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
-              style={{ background: STAR5, border: `1px solid ${STAR5_BORDER}` }}
-            >
-              Next →
-            </button>
-            {controlMethod == null && (
-              <span className="text-sm text-gray-500">
-                Choose a control method above to continue through the sequence.
+              <span className="text-sm text-gray-900 font-mono font-medium shrink-0 ml-1">
+              {vizActive
+                ? `Step ${vizStepIndex + 1} / ${steps.length}${statusPaused}`
+                : introStage === 'prefix'
+                  ? `Playing…${statusPaused}`
+                  : !hasSteps
+                    ? 'No trace yet'
+                    : controlMethod == null
+                      ? 'At really · choose a control method'
+                      : controlMethod === 'none'
+                        ? 'No steering · use ← / → to step'
+                        : 'Use ← / → to step'}
               </span>
-            )}
-          </div>
-          <div className="text-sm text-gray-900 font-mono font-medium">
-            {vizActive
-              ? `Step ${vizStepIndex + 1} / ${steps.length}${statusPaused}`
-              : introStage === 'prefix'
-                ? `Playing…${statusPaused}`
-                : !hasSteps
-                  ? 'No trace yet'
-                  : controlMethod == null
-                    ? 'At really · choose a control method'
-                    : controlMethod === 'none'
-                      ? 'No steering · use ← / → to step'
-                      : 'Use ← / → to step'}
+            </div>
           </div>
         </div>
 
