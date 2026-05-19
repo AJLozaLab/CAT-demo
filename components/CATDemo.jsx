@@ -814,11 +814,10 @@ export default function CATDemo() {
   )
   const chartTotalHeight = CHART_PLOT_HEIGHT + chartTopPad
 
-  const fixedPrompt = useMemo(() => getFixedSteerPromptDisplay(steps), [steps])
-  const { fixedPromptTrimmed, fixedPromptTrailing } = useMemo(() => {
-    const trimmed = fixedPrompt.trimEnd()
-    return { fixedPromptTrimmed: trimmed, fixedPromptTrailing: fixedPrompt.slice(trimmed.length) }
-  }, [fixedPrompt])
+  const fixedPrompt = useMemo(
+    () => getFixedSteerPromptDisplay(steps).trimEnd(),
+    [steps]
+  )
 
   const stepsRef = useRef(steps)
   stepsRef.current = steps
@@ -1378,9 +1377,8 @@ export default function CATDemo() {
           <div className="text-xs text-gray-900 uppercase tracking-widest mb-3 font-semibold">Generated text</div>
           <div className="text-lg leading-relaxed font-mono min-h-10 text-gray-900">
             <span className="inline rounded-md bg-gray-100 px-1.5 py-0 text-gray-600 ring-1 ring-gray-200/80 align-baseline leading-snug">
-              {fixedPromptTrimmed}
+              {fixedPrompt}
             </span>
-            {fixedPromptTrailing}
             {playCommittedParts.last ? (
               <GeneratedTokens prior={playCommittedParts.prior} last={playCommittedParts.last} />
             ) : null}

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
 const DEFAULT_PROMPT_PREFIX = '<|sos|><|phones|><|sotitle|>Review<|sotext|>'
-const DEMO_PROMPT = '[sos] I really '
+const DEMO_PROMPT = '[sos] I really'
 const CHART_PREFIX_LABELS = ['I', 'really']
 /** Match demo satisficing k — keep only top candidates per step in generated data. */
 const TABLE_TOP_K = 20
