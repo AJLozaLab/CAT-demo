@@ -1474,10 +1474,30 @@ export default function CATDemo() {
           </div>
 
           <div className="mt-6 pt-6 border-t border-gray-300">
-            <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm text-gray-900 text-xs sm:text-sm leading-relaxed">
+            <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm text-gray-900 text-xs sm:text-sm leading-relaxed space-y-3">
               <p>
-                The demo below shows how Conditional Attribute Transformers can be used to steer a language model toward 1★ or 5★ reviews, and how they can be used to sample tokens from the next-token and attribute distributions. This is not a live demo, but rather a number of precomputed trajectories that can be explored.
+                The demo below shows how Conditional Attribute Transformers steer a language model toward 1★ or 5★ reviews and sample from next-token and attribute distributions. This is not a live demo — it uses precomputed trajectories you can step through.
               </p>
+              <ul className="list-disc list-inside space-y-2 pl-0.5">
+                <li>
+                  <span className="font-semibold">Choose a trajectory:</span> No steering, Steer to 1★, or Steer to 5★.
+                </li>
+                <li>
+                  Use <span className="font-semibold">Next</span> to step through the trajectory one token at a time.
+                </li>
+                <li>
+                  Look at the graph to see how the probabilities change over time.
+                </li>
+                <li>
+                  Scroll down to the table to inspect the generated token, candidate next tokens, next-token probabilities, and attribute probabilities at each step.
+                </li>
+                <li>
+                  Sort the table by next-token probability or by 1★ / 5★ likelihood to compare how steering changes the model's predictions.
+                </li>
+                <li>
+                  At the end, select <span className="font-semibold">Reset</span> to explore a different trajectory.
+                </li>
+              </ul>
             </div>
           </div>
         </div>
