@@ -7,6 +7,7 @@ import {
   STEPS_1STAR,
   STEPS_5_THEN_1,
   STEPS_1_THEN_5,
+  STEPS_NO_STEERING,
   PROMPT_STEPS,
   BRANCH_FROM_5_INDEX,
   BRANCH_FROM_1_INDEX,
@@ -550,7 +551,8 @@ export default function CATDemo() {
   const prefixTimeoutsRef = useRef([])
   const prefixRunIdRef = useRef(0)
 
-  const isPreSteer = steerTarget == null
+  const isPreSteer = controlMethod == null
+  const noSteerReady = STEPS_NO_STEERING.length > 0
   const traceSteps = activeTrace ?? []
   const steps = isPreSteer ? PROMPT_STEPS : traceSteps
   const hasSteps = steps.length > 0
@@ -610,7 +612,13 @@ export default function CATDemo() {
     ]
   )
   const chartSlotCount = useMemo(
-    () => Math.max(STEPS_5STAR.length, STEPS_1STAR.length, PROMPT_STEPS.length),
+    () =>
+      Math.max(
+        STEPS_5STAR.length,
+        STEPS_1STAR.length,
+        STEPS_NO_STEERING.length,
+        PROMPT_STEPS.length
+      ),
     []
   )
   const chartMinWidth = Math.max(560, chartSlotCount * 44)
@@ -691,16 +699,19 @@ export default function CATDemo() {
   }
 
   const onNoSteerChange = () => {
+    if (!noSteerReady) return
     clearPlaybackTimers()
+    const targetSteps = STEPS_NO_STEERING
+    const startStep = countPromptOnlySteps(targetSteps)
     setControlMethod('none')
     setSteerTarget(null)
     setFirstSteerTarget(null)
-    setActiveTrace(null)
+    setActiveTrace(targetSteps)
     setBranchTaken(false)
     setBranchFromTarget(null)
     setChartPrefixSnapshot(null)
     setIntroStage('pre')
-    setCurrentStep(Math.max(0, PROMPT_STEPS.length - 1))
+    setCurrentStep(startStep)
     setPlayTokenCount(0)
     setPlayPaused(false)
   }
@@ -1102,8 +1113,10 @@ export default function CATDemo() {
       : isPausedAnim
         ? playTokenCount > 0
         : currentStep > steerStart)
-  const steerAccent = steerTarget === '1' ? STAR1 : STAR5
-  const steerAccentBorder = steerTarget === '1' ? STAR1_BORDER : STAR5_BORDER
+  const steerAccent =
+    steerTarget === '1' ? STAR1 : steerTarget === '5' ? STAR5 : '#6b7280'
+  const steerAccentBorder =
+    steerTarget === '1' ? STAR1_BORDER : steerTarget === '5' ? STAR5_BORDER : '#9ca3af'
   const branchIndex = chartBranchIndex
   const branchReady =
     pathForBranch === '5'
@@ -1162,8 +1175,18 @@ export default function CATDemo() {
                   <span
                     className="inline rounded px-1.5 py-0 font-semibold leading-snug align-baseline"
                     style={{
-                      background: steerTarget === '1' ? STAR1_SOFT : STAR5_SOFT,
-                      color: steerTarget === '1' ? '#a33436' : '#3d5cad',
+                      background:
+                        steerTarget === '1'
+                          ? STAR1_SOFT
+                          : steerTarget === '5'
+                            ? STAR5_SOFT
+                            : 'rgba(107, 114, 128, 0.14)',
+                      color:
+                        steerTarget === '1'
+                          ? '#a33436'
+                          : steerTarget === '5'
+                            ? '#3d5cad'
+                            : '#4b5563',
                     }}
                   >
                     {step.chosen_token_display}
@@ -1215,7 +1238,9 @@ export default function CATDemo() {
             <button
               type="button"
               onClick={onNoSteerChange}
-              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
+              disabled={!noSteerReady}
+              title={!noSteerReady ? 'Add STEPS_NO_STEERING in lib/steps-data.js' : 'Sample without attribute steering'}
+              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${
                 controlMethod === 'none'
                   ? 'border-gray-400 bg-gray-100 text-gray-900 font-semibold'
                   : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
@@ -1235,7 +1260,7 @@ export default function CATDemo() {
             </p>
           ) : controlMethod === 'none' ? (
             <p className="mt-2 text-sm text-gray-600">
-              No-steering walkthrough data coming soon.
+              Tokens sampled from the next-token distribution without attribute steering.
             </p>
           ) : (
             <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -1355,10 +1380,8 @@ export default function CATDemo() {
                   : controlMethod == null
                     ? 'At really · choose a control method'
                     : controlMethod === 'none'
-                      ? 'No steering · data coming soon'
-                      : isPreSteer
-                        ? 'At really'
-                        : 'Use ← / → to step'}
+                      ? 'No steering · use ← / → to step'
+                      : 'Use ← / → to step'}
           </div>
         </div>
 
