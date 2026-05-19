@@ -244,9 +244,10 @@ function configureXTickHighlight(chart, activeIndex) {
   const isActive = ctx =>
     ctx.index === activeIndex && !!chart.data.labels?.[ctx.index]
   ticks.color = '#000000'
+  ticks.padding = 10
   ticks.showLabelBackdrop = isActive
   ticks.backdropColor = ctx => (isActive(ctx) ? LAST_ADDED_HIGHLIGHT : undefined)
-  ticks.backdropPadding = { top: 3, bottom: 3, left: 6, right: 6 }
+  ticks.backdropPadding = { top: 4, bottom: 4, left: 6, right: 6 }
 }
 
 /** X at category `index` from laid-out points (falls back to scale ticks). */
@@ -309,13 +310,33 @@ const REGION_LABEL_LINE_HEIGHT = 12
 const REGION_LABEL_MIN_GAP = 8
 /** Fixed token slots for label centering at the left edge of a region (labels do not shift on reveal). */
 const REGION_LABEL_MAX_TOKENS = 5
-/** Fixed plot band height; total canvas height = this + chartRegionLabelTopPad(...). */
+/** Fixed plot band height; total canvas height = plot + top label pad + bottom pad. */
 const CHART_PLOT_HEIGHT = 200
+/** Space below plot for rotated x labels + yellow tick backdrop (Chart.js layout.padding). */
+const CHART_BOTTOM_PAD = 0
+/** Extra space below canvas so labels are not clipped by overflow containers. */
+const CHART_WRAPPER_BOTTOM = 16
+const CHART_SIDE_PAD = 6
 const REGION_LABEL_BASE_MARGIN = 12
 
 function chartRegionLabelTopPad(cfg = {}) {
   const labelBlock = 3 * REGION_LABEL_LINE_HEIGHT + REGION_LABEL_BASE_MARGIN
   return labelBlock
+}
+
+function applyChartLayoutPadding(chart, topPad) {
+  if (!chart.options.layout) chart.options.layout = {}
+  chart.options.layout.padding = {
+    top: topPad,
+    bottom: CHART_BOTTOM_PAD,
+    left: CHART_SIDE_PAD,
+    right: CHART_SIDE_PAD,
+  }
+}
+
+function configureYAxisTicks(chart) {
+  const ticks = chart.options.scales?.y?.ticks
+  if (ticks) ticks.color = '#000000'
 }
 
 const GUIDE_LABEL_FONT = '600 10px var(--font-sans), Inter, system-ui, sans-serif'
@@ -581,6 +602,10 @@ function applyChartStep(
   if (capacity === 0) return
   const hi = Math.min(Math.max(0, idx), stepList.length - 1)
   const revealed = Math.min(Math.max(0, visibleCount), stepList.length, capacity)
+  const steerStartIdx = countPromptOnlySteps(stepList)
+  /** No yellow highlight on prompt-only tokens (e.g. I, really) — they live in the fixed prompt. */
+  const highlightIdx =
+    preSteer || hi < steerStartIdx || stepList[hi]?.prompt_only ? null : hi
   const stepLabels = chartLabelsForSteps(stepList)
   const snapEnd = prefixSnapshot?.branchIndex ?? 0
   const star5 = Array(capacity).fill(null)
@@ -639,7 +664,7 @@ function applyChartStep(
       chart.data.datasets[1],
       pointStyleArrays(PROMPT_CHART_GREY, PROMPT_CHART_GREY_DARK)
     )
-    configureXTickHighlight(chart, hi)
+    configureXTickHighlight(chart, highlightIdx)
   } else {
     chart.data.datasets[0].borderColor = STAR5
     chart.data.datasets[1].borderColor = STAR1
@@ -647,7 +672,7 @@ function applyChartStep(
     chart.data.datasets[1].backgroundColor = STAR1_SOFT
     Object.assign(chart.data.datasets[0], pointStyleArrays(STAR5, STAR5))
     Object.assign(chart.data.datasets[1], pointStyleArrays(STAR1, STAR1))
-    configureXTickHighlight(chart, hi)
+    configureXTickHighlight(chart, highlightIdx)
   }
 
   chart.data.datasets.forEach(ds => {
@@ -684,15 +709,8 @@ function applyChartStep(
     branchTaken,
     branchIndex,
   })
-  if (!chart.options.layout) chart.options.layout = {}
-  const pad = chart.options.layout.padding
-  if (typeof pad === 'number') {
-    chart.options.layout.padding = { top: regionPad, right: pad, bottom: pad, left: pad }
-  } else if (pad && typeof pad === 'object') {
-    pad.top = regionPad
-  } else {
-    chart.options.layout.padding = { top: regionPad }
-  }
+  applyChartLayoutPadding(chart, regionPad)
+  configureYAxisTicks(chart)
 
   chart.update('none')
 }
@@ -730,7 +748,33 @@ export default function CATDemo() {
   const noSteerReady = STEPS_NO_STEERING.length > 0
   const traceSteps = activeTrace ?? EMPTY_TRACE
   const traceKey = controlMethod ?? 'pre'
-  const steps = isPreSteer ? PROMPT_STEPS : traceSteps
+  const pathForBranchEarly =
+    branchTaken && branchFromTarget ? branchFromTarget : steerTarget
+  const branchIndexEarly =
+    pathForBranchEarly === '5'
+      ? BRANCH_FROM_5_INDEX
+      : pathForBranchEarly === '1'
+        ? BRANCH_FROM_1_INDEX
+        : null
+  const steps = useMemo(() => {
+    if (isPreSteer) return PROMPT_STEPS
+    if (
+      branchTaken &&
+      branchFromTarget &&
+      branchIndexEarly != null &&
+      currentStep < branchIndexEarly
+    ) {
+      return branchFromTarget === '5' ? STEPS_5STAR : STEPS_1STAR
+    }
+    return traceSteps
+  }, [
+    isPreSteer,
+    traceSteps,
+    branchTaken,
+    branchFromTarget,
+    branchIndexEarly,
+    currentStep,
+  ])
   const hasSteps = steps.length > 0
   const star1Ready = STEPS_1STAR.length > 0
   const live = !isPreSteer && introStage === 'live' && traceSteps.length > 0
@@ -812,7 +856,8 @@ export default function CATDemo() {
       }),
     [isPreSteer, chartPromptEndIndex, steerTarget, branchTaken, chartBranchIndex]
   )
-  const chartTotalHeight = CHART_PLOT_HEIGHT + chartTopPad
+  const chartTotalHeight =
+    CHART_PLOT_HEIGHT + chartTopPad + CHART_BOTTOM_PAD + CHART_WRAPPER_BOTTOM
 
   const fixedPrompt = useMemo(
     () => getFixedSteerPromptDisplay(steps).trimEnd(),
@@ -835,10 +880,8 @@ export default function CATDemo() {
   /** playTokenCount so viz index `stepIndex` is the active token (stepIndex is 0-based). */
   const playCountForStepIndex = stepIndex => stepIndex + 1
 
-  const initialSteerPlayCount = (stepList, stepIndex) => {
-    const steerStart = countPromptOnlySteps(stepList)
-    return Math.max(playCountForStepIndex(steerStart), playCountForStepIndex(stepIndex))
-  }
+  const initialSteerPlayCount = (_stepList, stepIndex) =>
+    playCountForStepIndex(stepIndex)
 
   const resetIntro = useCallback(() => {
     prefixRunIdRef.current += 1
@@ -874,7 +917,7 @@ export default function CATDemo() {
   const onSteerChange = next => {
     clearPlaybackTimers()
     const targetSteps = next === '5' ? STEPS_5STAR : STEPS_1STAR
-    const startStep = countPromptOnlySteps(targetSteps)
+    const steerStart = countPromptOnlySteps(targetSteps)
     setControlMethod(next)
     setSteerTarget(next)
     setFirstSteerTarget(next)
@@ -883,7 +926,7 @@ export default function CATDemo() {
     setBranchFromTarget(null)
     setChartPrefixSnapshot(null)
     setIntroStage('pre')
-    setCurrentStep(startStep)
+    setCurrentStep(Math.max(0, steerStart - 1))
     setPlayTokenCount(0)
     setPlayPaused(false)
   }
@@ -892,7 +935,7 @@ export default function CATDemo() {
     if (!noSteerReady) return
     clearPlaybackTimers()
     const targetSteps = STEPS_NO_STEERING
-    const startStep = countPromptOnlySteps(targetSteps)
+    const steerStart = countPromptOnlySteps(targetSteps)
     setControlMethod('none')
     setSteerTarget(null)
     setFirstSteerTarget(null)
@@ -901,10 +944,53 @@ export default function CATDemo() {
     setBranchFromTarget(null)
     setChartPrefixSnapshot(null)
     setIntroStage('pre')
-    setCurrentStep(startStep)
+    setCurrentStep(Math.max(0, steerStart - 1))
     setPlayTokenCount(0)
     setPlayPaused(false)
   }
+
+  const branchIndexForTarget = target =>
+    target === '5' ? BRANCH_FROM_5_INDEX : target === '1' ? BRANCH_FROM_1_INDEX : null
+
+  const revertBranch = useCallback(() => {
+    const origin = branchFromTarget
+    if (!origin) return
+    setActiveTrace(origin === '5' ? STEPS_5STAR : STEPS_1STAR)
+    setSteerTarget(origin)
+    setBranchTaken(false)
+    setBranchFromTarget(null)
+    setChartPrefixSnapshot(null)
+  }, [branchFromTarget])
+
+  const stepBack = useCallback(() => {
+    const branchIdx =
+      branchTaken && branchFromTarget ? branchIndexForTarget(branchFromTarget) : null
+
+    if (live) {
+      setCurrentStep(s => {
+        const next = Math.max(s - 1, 0)
+        if (branchIdx != null && next < branchIdx) revertBranch()
+        return next
+      })
+      return
+    }
+    if (isPausedAnim) {
+      setPlayTokenCount(c => {
+        const n = Math.max(0, c - 1)
+        const nextStep = Math.max(0, n - 1)
+        if (branchIdx != null && nextStep < branchIdx) revertBranch()
+        setCurrentStep(nextStep)
+        return n
+      })
+      return
+    }
+    setCurrentStep(s => {
+      const minStep = Math.max(0, countPromptOnlySteps(stepsRef.current) - 1)
+      const next = Math.max(minStep, s - 1)
+      if (branchIdx != null && next < branchIdx) revertBranch()
+      return next
+    })
+  }, [branchTaken, branchFromTarget, live, isPausedAnim, revertBranch])
 
   const onBranchSwitch = () => {
     prefixRunIdRef.current += 1
@@ -916,7 +1002,6 @@ export default function CATDemo() {
     prefixTimeoutsRef.current = []
     const step = currentStepRef.current
     const branchIdx = steerTarget === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
-    const resumeStep = Math.max(step, branchIdx)
     setChartPrefixSnapshot(buildChartPrefixSnapshot(stepsRef.current, branchIdx))
     if (steerTarget === '5') {
       setBranchFromTarget('5')
@@ -928,8 +1013,8 @@ export default function CATDemo() {
       setSteerTarget('5')
     }
     setBranchTaken(true)
-    setCurrentStep(resumeStep)
-    setPlayTokenCount(playCountForStepIndex(resumeStep))
+    setCurrentStep(step)
+    setPlayTokenCount(playCountForStepIndex(step))
     setIntroStage('pre')
     setPlayPaused(true)
   }
@@ -989,13 +1074,21 @@ export default function CATDemo() {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
-            layout: { padding: { top: chartTopPad } },
+            layout: {
+              padding: {
+                top: chartTopPad,
+                bottom: CHART_BOTTOM_PAD,
+                left: CHART_SIDE_PAD,
+                right: CHART_SIDE_PAD,
+              },
+            },
             scales: {
               x: {
                 ticks: {
                   color: '#000000',
                   maxRotation: 45,
                   autoSkip: false,
+                  padding: 10,
                   showLabelBackdrop: false,
                   backdropPadding: 6,
                   font: { family: 'JetBrains Mono, monospace', size: 11 },
@@ -1009,7 +1102,7 @@ export default function CATDemo() {
               },
               y: {
                 min: 0, max: 1,
-                ticks: { color: '#374151', font: { size: 11 }, callback: v => (v * 100).toFixed(0) + '%' },
+                ticks: { color: '#000000', font: { size: 11 }, callback: v => (v * 100).toFixed(0) + '%' },
                 grid:  { display: false },
                 border: { color: '#e5e7eb' },
               },
@@ -1059,7 +1152,7 @@ export default function CATDemo() {
         if (e.key === 'ArrowRight') setCurrentStep(s => Math.min(s + 1, steps.length - 1))
         if (e.key === 'ArrowLeft') setCurrentStep(s => Math.max(s - 1, 0))
       } else if (!isPreSteer && !live && !isPlayingAnim) {
-        const min = countPromptOnlySteps(steps)
+        const min = Math.max(0, countPromptOnlySteps(steps) - 1)
         if (e.key === 'ArrowRight') {
           if (isPausedAnim) {
             setPlayTokenCount(c => {
@@ -1324,7 +1417,7 @@ export default function CATDemo() {
       ? currentStep > 0
       : isPausedAnim
         ? playTokenCount > 0
-        : currentStep > steerStart)
+        : currentStep > Math.max(0, steerStart - 1))
   const steerAccent =
     steerTarget === '1' ? STAR1 : steerTarget === '5' ? STAR5 : '#6b7280'
   const steerAccentBorder =
@@ -1336,8 +1429,17 @@ export default function CATDemo() {
       : pathForBranch === '1'
         ? STEPS_1_THEN_5.length > 0
         : false
+  const branchSwitchStep =
+    branchIndex != null
+      ? Math.max(branchIndex, steerStart)
+      : null
   const showBranchSwitch =
-    !isPreSteer && !branchTaken && branchReady && vizStepIndex === branchIndex
+    !isPreSteer &&
+    !branchTaken &&
+    branchReady &&
+    branchSwitchStep != null &&
+    vizStepIndex === branchSwitchStep &&
+    !steps[vizStepIndex]?.prompt_only
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -1366,9 +1468,14 @@ export default function CATDemo() {
             <p>
                   We show that Conditional Attribute Transformers achieve <span className='font-bold'>state-of-the-art performance</span> in reinforcement learning tasks and language modeling. In medical foundation models, they enable dynamic, interpretable risk estimation for downstream clinical outcomes and elucidate the tokens that drive risk, while achieving a <span className='font-bold'>10<sup>8</sup>× speedup over traditional sampling-based approaches</span>. As an additional benefit, we find that this joint task <span className='font-bold'>improves next-token prediction</span> in baseline language models.
                 </p>
-            <p>
-                  The demo below shows how Conditional Attribute Transformers can be used to steer a language model toward 1★ or 5★ reviews, and how they can be used to sample tokens from the next-token and attribute distributions. This is not a live demo, but rather a number of precomputed trajectories that can be explored.
-            </p>
+          </div>
+
+          <div className="mt-6 pt-6 border-t border-gray-300">
+            <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm text-gray-900 text-xs sm:text-sm leading-relaxed">
+              <p>
+                The demo below shows how Conditional Attribute Transformers can be used to steer a language model toward 1★ or 5★ reviews, and how they can be used to sample tokens from the next-token and attribute distributions. This is not a live demo, but rather a number of precomputed trajectories that can be explored.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -1385,7 +1492,11 @@ export default function CATDemo() {
             {live && step && (
               <>
                 {livePriorText ? <ContextText context={livePriorText} /> : null}
-                <LastAddedToken token={step.chosen_token_display} />
+                {step.prompt_only ? (
+                  <ContextText context={step.chosen_token_display} />
+                ) : (
+                  <LastAddedToken token={step.chosen_token_display} />
+                )}
               </>
             )}
           </div>
@@ -1492,16 +1603,7 @@ export default function CATDemo() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (live) setCurrentStep(s => Math.max(s - 1, 0))
-                    else if (isPausedAnim) {
-                      setPlayTokenCount(c => {
-                        const n = Math.max(0, c - 1)
-                        setCurrentStep(Math.max(0, n - 1))
-                        return n
-                      })
-                    } else setCurrentStep(s => Math.max(steerStart, s - 1))
-                  }}
+                  onClick={stepBack}
                   disabled={!canStepBack}
                   className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg text-sm font-medium text-gray-900 transition-colors shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
                 >
@@ -1561,7 +1663,13 @@ export default function CATDemo() {
                 </span>
               </div>
             </div>
-            <div className="relative overflow-x-auto" style={{ height: chartTotalHeight }}>
+            <div
+              className="relative overflow-x-auto overflow-y-visible"
+              style={{
+                height: chartTotalHeight,
+                paddingBottom: CHART_WRAPPER_BOTTOM,
+              }}
+            >
               <div className="h-full" style={{ minWidth: chartMinWidth }}>
                 <canvas ref={canvasRef} />
               </div>
