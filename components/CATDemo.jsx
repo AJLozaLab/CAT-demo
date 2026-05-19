@@ -1475,10 +1475,11 @@ export default function CATDemo() {
 
           <div className="mt-6 pt-6 border-t border-gray-300">
             <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm text-gray-900 text-xs sm:text-sm leading-relaxed space-y-3">
+              <h2 className="text-sm font-semibold text-gray-900">How to Use</h2>
               <p>
                 The demo below shows how Conditional Attribute Transformers steer a language model toward 1★ or 5★ reviews and sample from next-token and attribute distributions. This is not a live demo — it uses precomputed trajectories you can step through.
               </p>
-              <ul className="list-disc list-inside space-y-2 pl-0.5">
+              <ol className="list-decimal list-inside space-y-2 pl-0.5">
                 <li>
                   <span className="font-semibold">Choose a trajectory:</span> No steering, Steer to 1★, or Steer to 5★.
                 </li>
@@ -1497,7 +1498,7 @@ export default function CATDemo() {
                 <li>
                   At the end, select <span className="font-semibold">Reset</span> to explore a different trajectory.
                 </li>
-              </ul>
+              </ol>
             </div>
           </div>
         </div>
