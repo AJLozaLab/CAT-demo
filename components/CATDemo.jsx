@@ -23,6 +23,7 @@ const YELLOW = '#ffdb9c'
 
 const STAR5_SOFT = 'rgba(100, 143, 255, 0.14)'
 const STAR1_SOFT = 'rgba(217, 91, 93, 0.14)'
+const LAST_ADDED_HIGHLIGHT = '#F4B400'
 const STAR5_BORDER = '#4a72d9'
 const STAR1_BORDER = '#b84a4c'
 
@@ -87,6 +88,27 @@ function ContextText({ context }) {
       {parts.map((part, i) => (
         <span key={i}>{renderSpecial(part)}</span>
       ))}
+    </>
+  )
+}
+
+function LastAddedToken({ token }) {
+  if (!token) return null
+  return (
+    <span
+      className="inline rounded px-1.5 py-0 font-semibold leading-snug align-baseline"
+      style={{ background: LAST_ADDED_HIGHLIGHT, color: '#1f2937' }}
+    >
+      {isSpecialToken(token) ? renderSpecial(token) : token}
+    </span>
+  )
+}
+
+function GeneratedTokens({ prior, last }) {
+  return (
+    <>
+      {prior ? <ContextText context={prior} /> : null}
+      <LastAddedToken token={last} />
     </>
   )
 }
@@ -503,6 +525,19 @@ function committedChosenDisplay(steps, count) {
     .filter(s => !s.prompt_only)
     .map(s => s.chosen_token_display)
     .join('')
+}
+
+function committedChosenParts(steps, count) {
+  if (!steps?.length || count <= 0) return { prior: '', last: '' }
+  const tokens = steps
+    .slice(0, count)
+    .filter(s => !s.prompt_only)
+    .map(s => s.chosen_token_display)
+  if (!tokens.length) return { prior: '', last: '' }
+  return {
+    prior: tokens.slice(0, -1).join(''),
+    last: tokens[tokens.length - 1],
+  }
 }
 
 function applyChartStep(
@@ -1214,12 +1249,16 @@ export default function CATDemo() {
   const sortIcon = col => sortCol !== col ? '↕' : sortDir === 'asc' ? '↑' : '↓'
   const thClass  = col => `px-5 py-3 cursor-pointer select-none transition-colors hover:text-[#5278d9] ${sortCol === col ? 'text-[#648FFF]' : ''}`
 
-  const playCommittedText =
+  const playCommittedCount =
     isPlayingAnim || isPausedAnim
-      ? committedChosenDisplay(steps, playTokenCount)
+      ? playTokenCount
       : !isPreSteer && !live
-        ? committedChosenDisplay(steps, currentStep + 1)
-        : ''
+        ? currentStep + 1
+        : 0
+  const playCommittedParts = useMemo(
+    () => committedChosenParts(steps, playCommittedCount),
+    [steps, playCommittedCount]
+  )
   const livePriorText = live && step ? committedChosenDisplay(steps, currentStep) : ''
 
   const statusPaused = isPausedAnim ? ' · paused' : ''
@@ -1285,6 +1324,9 @@ export default function CATDemo() {
             <p>
                   We show that Conditional Attribute Transformers achieve <span className='font-bold'>state-of-the-art performance</span> in reinforcement learning tasks and language modeling. In medical foundation models, they enable dynamic, interpretable risk estimation for downstream clinical outcomes and elucidate the tokens that drive risk, while achieving a <span className='font-bold'>10<sup>8</sup>× speedup over traditional sampling-based approaches</span>. As an additional benefit, we find that this joint task <span className='font-bold'>improves next-token prediction</span> in baseline language models.
                 </p>
+            <p>
+                  The demo below shows how Conditional Attribute Transformers can be used to steer a language model toward 1★ or 5★ reviews, and how they can be used to sample tokens from the next-token distribution without attribute steering. This is not a live demo, but rather a number of trajectories that can be explored.
+            </p>
           </div>
         </div>
 
@@ -1296,33 +1338,13 @@ export default function CATDemo() {
               {fixedPromptTrimmed}
             </span>
             {fixedPromptTrailing}
-            {playCommittedText ? <ContextText context={playCommittedText} /> : null}
+            {playCommittedParts.last ? (
+              <GeneratedTokens prior={playCommittedParts.prior} last={playCommittedParts.last} />
+            ) : null}
             {live && step && (
               <>
                 {livePriorText ? <ContextText context={livePriorText} /> : null}
-                {isSpecialToken(step.chosen_token_display) ? (
-                  renderSpecial(step.chosen_token_display)
-                ) : (
-                  <span
-                    className="inline rounded px-1.5 py-0 font-semibold leading-snug align-baseline"
-                    style={{
-                      background:
-                        steerTarget === '1'
-                          ? STAR1_SOFT
-                          : steerTarget === '5'
-                            ? STAR5_SOFT
-                            : 'rgba(107, 114, 128, 0.14)',
-                      color:
-                        steerTarget === '1'
-                          ? '#a33436'
-                          : steerTarget === '5'
-                            ? '#3d5cad'
-                            : '#4b5563',
-                    }}
-                  >
-                    {step.chosen_token_display}
-                  </span>
-                )}
+                <LastAddedToken token={step.chosen_token_display} />
               </>
             )}
           </div>
