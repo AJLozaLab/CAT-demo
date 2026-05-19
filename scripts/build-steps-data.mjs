@@ -8,7 +8,7 @@ const DEFAULT_PROMPT_PREFIX = '<|sos|><|phones|><|sotitle|>Review<|sotext|>'
 const DEMO_PROMPT = '[sos] I really'
 const CHART_PREFIX_LABELS = ['I', 'really']
 /** Match demo satisficing k — keep only top candidates per step in generated data. */
-const TABLE_TOP_K = 20
+const TABLE_TOP_K = 50
 
 function parseCsvLine(line) {
   const out = []
@@ -76,8 +76,12 @@ function listStepCsvFiles(dir) {
     .filter(f => f.endsWith('.csv') && f !== 'summary.csv' && !f.includes('.ipynb_checkpoints'))
 }
 
-/** Resolve summary csv name to an on-disk file (handles phones vs appliances prefix drift). */
-function resolveCsvPath(dir, csvFile, starKey, token) {
+function contextLenForFile(csvPath, starKey, promptPrefix) {
+  const { context } = tokenFromFilename(path.basename(csvPath), starKey, promptPrefix)
+  return context.length
+}
+
+function resolveCsvPathWithMarker(dir, csvFile, starKey, token, promptPrefix) {
   const exact = path.join(dir, csvFile)
   if (fs.existsSync(exact)) return exact
 
@@ -104,17 +108,29 @@ function resolveCsvPath(dir, csvFile, starKey, token) {
     if (suffixMatch) return path.join(dir, suffixMatch)
 
     let bestPath = path.join(dir, byToken[0])
-    let bestProb = -1
+    let bestLen = contextLenForFile(bestPath, starKey, promptPrefix)
     for (const f of byToken) {
-      const row = pickChosenRow(readStepTable(path.join(dir, f)), token)
-      if (row && row.prob > bestProb) {
-        bestProb = row.prob
-        bestPath = path.join(dir, f)
+      const candidate = path.join(dir, f)
+      const len = contextLenForFile(candidate, starKey, promptPrefix)
+      if (len < bestLen) {
+        bestLen = len
+        bestPath = candidate
       }
     }
     return bestPath
   }
 
+  return null
+}
+
+/** Resolve summary csv name to an on-disk file (handles phones vs appliances prefix drift). */
+function resolveCsvPath(dir, csvFile, starKey, token, promptPrefix) {
+  const direct = resolveCsvPathWithMarker(dir, csvFile, starKey, token, promptPrefix)
+  if (direct) return direct
+  if (starKey.includes('then')) {
+    const fallback = resolveCsvPathWithMarker(dir, csvFile, '5', token, promptPrefix)
+    if (fallback) return fallback
+  }
   return null
 }
 
@@ -182,7 +198,7 @@ function buildSteps(dir, starKey) {
   const summary = readSummary(dir, starKey)
   const steps = []
   for (const row of summary) {
-    const csvPath = resolveCsvPath(dir, row.csvFile, starKey, row.token)
+    const csvPath = resolveCsvPath(dir, row.csvFile, starKey, row.token, promptPrefix)
     if (!csvPath) {
       console.warn('Missing:', path.join(dir, row.csvFile))
       continue
@@ -219,6 +235,20 @@ function buildSteps(dir, starKey) {
   return steps
 }
 
+/**
+ * Build branch trace: shared main-path prefix (through last matching steered token, e.g. recommend)
+ * then the 1★/5★ alternate suffix from tempdata.
+ */
+function buildBranchSteps(mainSteps, dir, starKey) {
+  const branchBody = buildSteps(dir, starKey)
+  if (!mainSteps?.length || !branchBody.length) return branchBody
+  const mainSkip = countPromptOnlySteps(mainSteps)
+  let prefixEnd = findBranchIndex(mainSteps, branchBody)
+  if (prefixEnd <= mainSkip) prefixEnd = Math.min(mainSkip + 1, mainSteps.length)
+  const branchStart = branchTailStartIndex(branchBody, starKey)
+  return [...mainSteps.slice(0, prefixEnd), ...branchBody.slice(branchStart)]
+}
+
 function emitSteps(name, steps) {
   return `export const ${name} = ${JSON.stringify(steps, null, 0)};\n`
 }
@@ -246,7 +276,7 @@ function countPromptOnlySteps(steps) {
   return n
 }
 
-/** First main-path step index where steered decode diverges from the branch trace (aligns mismatched prompt-only lengths). */
+/** First main-path index where steered decode diverges from the branch trace. */
 function findBranchIndex(mainSteps, branchSteps) {
   const mainSkip = countPromptOnlySteps(mainSteps)
   const branchSkip = countPromptOnlySteps(branchSteps)
@@ -259,17 +289,46 @@ function findBranchIndex(mainSteps, branchSteps) {
   return mainSteps.length
 }
 
+function branchTailStartIndex(branchSteps, starKey) {
+  const towardTag = starKey.includes('5_then_1') ? '1-star' : '5-star'
+  const byExplanation = branchSteps.findIndex(
+    s => !s.prompt_only && (s.explanation || '').includes(towardTag)
+  )
+  if (byExplanation >= 0) return byExplanation
+  const fallbackToken = starKey.includes('5_then_1') ? 'a' : 'dryer'
+  const byToken = branchSteps.findIndex(
+    s => !s.prompt_only && (s.chosen_token_display || '').trim() === fallbackToken
+  )
+  if (byToken >= 0) return byToken
+  return countPromptOnlySteps(branchSteps)
+}
+
 function mergeTraceAtBranch(mainSteps, branchSteps, branchIndex) {
   const alignShift = countPromptOnlySteps(mainSteps) - countPromptOnlySteps(branchSteps)
   const branchStart = Math.max(0, branchIndex - alignShift)
-  // Keep the token already chosen on the main path at branchIndex; alternate suffix starts after it.
-  return [...mainSteps.slice(0, branchIndex + 1), ...branchSteps.slice(branchStart + 1)]
+  return [...mainSteps.slice(0, branchIndex), ...branchSteps.slice(branchStart)]
+}
+
+/** Main-path step where the branch button should appear (last shared token before the fork). */
+function branchSwitchStepIndex(mainSteps, branchIndex) {
+  if (branchIndex == null || !mainSteps?.length) return null
+  const steerStart = countPromptOnlySteps(mainSteps)
+  if (branchIndex <= steerStart) return branchIndex
+  return branchIndex - 1
 }
 
 const steer5 = buildSteps(path.join(root, 'tempdata/steer_to_5'), '5')
 const steer1 = buildSteps(path.join(root, 'tempdata/steer_to_1'), '1')
-const steer5then1 = buildSteps(path.join(root, 'tempdata/steer_to_5_then_1'), '5_then_1')
-const steer1then5 = buildSteps(path.join(root, 'tempdata/steer_to_1_then_5'), '1_then_5')
+const steer5then1 = buildBranchSteps(
+  steer5,
+  path.join(root, 'tempdata/steer_to_5_then_1'),
+  '5_then_1'
+)
+const steer1then5 = buildBranchSteps(
+  steer1,
+  path.join(root, 'tempdata/steer_to_1_then_5'),
+  '1_then_5'
+)
 const promptFrom5 = steer5.filter(s => s.prompt_only)
 const promptFrom1 = steer1.filter(s => s.prompt_only)
 const promptSteps = promptFrom1.length >= promptFrom5.length ? promptFrom1 : promptFrom5
@@ -281,8 +340,10 @@ if (noSteering.length) noSteering[0].fixed_prompt_display = DEMO_PROMPT
 
 const branchFrom5Index = findBranchIndex(steer5, steer5then1)
 const branchFrom1Index = findBranchIndex(steer1, steer1then5)
+const branchSwitchFrom5Index = branchSwitchStepIndex(steer5, branchFrom5Index)
+const branchSwitchFrom1Index = branchSwitchStepIndex(steer1, branchFrom1Index)
 
-const out = `/** Generated by scripts/build-steps-data.mjs from tempdata/ */\n\n${emitSteps('PROMPT_STEPS', promptSteps)}${emitSteps('STEPS_5STAR', steer5)}${emitSteps('STEPS_1STAR', steer1)}${emitSteps('STEPS_5_THEN_1', steer5then1)}${emitSteps('STEPS_1_THEN_5', steer1then5)}${emitSteps('STEPS_NO_STEERING', noSteering)}export const STEPS = STEPS_5STAR;\n\n/** Step index on the 5★ path where steer_to_5_then_1 diverges (e.g. after "recommend"). */\nexport const BRANCH_FROM_5_INDEX = ${branchFrom5Index};\n\n/** Step index on the 1★ path where steer_to_1_then_5 diverges (e.g. "!"). */\nexport const BRANCH_FROM_1_INDEX = ${branchFrom1Index};\n\n/** Labels for prompt-only steps (I, really) on the chart. */\nexport const CHART_PREFIX_LABELS = ${JSON.stringify(CHART_PREFIX_LABELS)};\n\n/** Shown in grey before steered decode; generation is appended after this. Override with \`fixed_prompt_display\` on \`steps[0]\`. */\nexport const FIXED_STEER_PROMPT_DISPLAY = '${DEMO_PROMPT}';\n\nexport function getFixedSteerPromptDisplay(steps) {\n  if (steps?.length && typeof steps[0].fixed_prompt_display === 'string')\n    return steps[0].fixed_prompt_display;\n  return FIXED_STEER_PROMPT_DISPLAY;\n}\n\nexport function countPromptOnlySteps(steps) {\n  if (!steps?.length) return 0;\n  let n = 0;\n  for (const s of steps) {\n    if (s.prompt_only) n++;\n    else break;\n  }\n  return n;\n}\n\nexport function mergeTraceAtBranch(mainSteps, branchSteps, branchIndex) {\n  const alignShift = countPromptOnlySteps(mainSteps) - countPromptOnlySteps(branchSteps);\n  const branchStart = Math.max(0, branchIndex - alignShift);\n  return [...mainSteps.slice(0, branchIndex + 1), ...branchSteps.slice(branchStart + 1)];\n}\n`
+const out = `/** Generated by scripts/build-steps-data.mjs from tempdata/ */\n\n${emitSteps('PROMPT_STEPS', promptSteps)}${emitSteps('STEPS_5STAR', steer5)}${emitSteps('STEPS_1STAR', steer1)}${emitSteps('STEPS_5_THEN_1', steer5then1)}${emitSteps('STEPS_1_THEN_5', steer1then5)}${emitSteps('STEPS_NO_STEERING', noSteering)}export const STEPS = STEPS_5STAR;\n\n/** First main-path step index where the branch trace diverges (fork token, e.g. "this" vs "a"). */\nexport const BRANCH_FROM_5_INDEX = ${branchFrom5Index};\n\n/** Main-path step index where the 5★→1★ switch button is shown (last shared token before the fork). */\nexport const BRANCH_SWITCH_FROM_5_INDEX = ${branchSwitchFrom5Index};\n\n/** First main-path step index where the branch trace diverges. */\nexport const BRANCH_FROM_1_INDEX = ${branchFrom1Index};\n\n/** Main-path step index where the 1★→5★ switch button is shown. */\nexport const BRANCH_SWITCH_FROM_1_INDEX = ${branchSwitchFrom1Index};\n\n/** Labels for prompt-only steps (I, really) on the chart. */\nexport const CHART_PREFIX_LABELS = ${JSON.stringify(CHART_PREFIX_LABELS)};\n\n/** Shown in grey before steered decode; generation is appended after this. Override with \`fixed_prompt_display\` on \`steps[0]\`. */\nexport const FIXED_STEER_PROMPT_DISPLAY = '${DEMO_PROMPT}';\n\nexport function getFixedSteerPromptDisplay(steps) {\n  if (steps?.length && typeof steps[0].fixed_prompt_display === 'string')\n    return steps[0].fixed_prompt_display;\n  return FIXED_STEER_PROMPT_DISPLAY;\n}\n\nexport function countPromptOnlySteps(steps) {\n  if (!steps?.length) return 0;\n  let n = 0;\n  for (const s of steps) {\n    if (s.prompt_only) n++;\n    else break;\n  }\n  return n;\n}\n\nexport function branchSwitchStepIndex(mainSteps, branchIndex) {\n  if (branchIndex == null || !mainSteps?.length) return null;\n  const steerStart = countPromptOnlySteps(mainSteps);\n  if (branchIndex <= steerStart) return branchIndex;\n  return branchIndex - 1;\n}\n\nexport function mergeTraceAtBranch(mainSteps, branchSteps, branchIndex) {\n  const alignShift = countPromptOnlySteps(mainSteps) - countPromptOnlySteps(branchSteps);\n  const branchStart = Math.max(0, branchIndex - alignShift);\n  return [...mainSteps.slice(0, branchIndex), ...branchSteps.slice(branchStart)];\n}\n`
 
 fs.writeFileSync(path.join(root, 'lib/steps-data.js'), out)
 console.log(`STEPS_5STAR: ${steer5.length} steps`)

@@ -11,6 +11,8 @@ import {
   PROMPT_STEPS,
   BRANCH_FROM_5_INDEX,
   BRANCH_FROM_1_INDEX,
+  BRANCH_SWITCH_FROM_5_INDEX,
+  BRANCH_SWITCH_FROM_1_INDEX,
   getFixedSteerPromptDisplay,
   countPromptOnlySteps,
   mergeTraceAtBranch,
@@ -951,7 +953,6 @@ export default function CATDemo() {
 
   const branchIndexForTarget = target =>
     target === '5' ? BRANCH_FROM_5_INDEX : target === '1' ? BRANCH_FROM_1_INDEX : null
-
   const revertBranch = useCallback(() => {
     const origin = branchFromTarget
     if (!origin) return
@@ -1181,15 +1182,15 @@ export default function CATDemo() {
   const tryPauseAtBranchPoint = useCallback((runId, count) => {
     const steer = steerTargetRef.current
     if (!steer || branchTakenRef.current) return false
-    const branchIdx = steer === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
+    const switchIdx = steer === '5' ? BRANCH_SWITCH_FROM_5_INDEX : BRANCH_SWITCH_FROM_1_INDEX
     const hasBranch = steer === '5' ? STEPS_5_THEN_1.length > 0 : STEPS_1_THEN_5.length > 0
-    if (!hasBranch || count !== branchIdx + 1) return false
+    if (!hasBranch || switchIdx == null || count !== switchIdx + 1) return false
     if (runId !== prefixRunIdRef.current) return true
     prefixRunIdRef.current += 1
     for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
     prefixTimeoutsRef.current = []
     setPlayTokenCount(count)
-    setCurrentStep(branchIdx)
+    setCurrentStep(switchIdx)
     setPlayPaused(true)
     return true
   }, [])
@@ -1430,9 +1431,11 @@ export default function CATDemo() {
         ? STEPS_1_THEN_5.length > 0
         : false
   const branchSwitchStep =
-    branchIndex != null
-      ? Math.max(branchIndex, steerStart)
-      : null
+    pathForBranch === '5'
+      ? BRANCH_SWITCH_FROM_5_INDEX
+      : pathForBranch === '1'
+        ? BRANCH_SWITCH_FROM_1_INDEX
+        : null
   const showBranchSwitch =
     !isPreSteer &&
     !branchTaken &&
