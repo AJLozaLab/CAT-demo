@@ -1334,22 +1334,6 @@ export default function CATDemo() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => onSteerChange('5')}
-              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
-                steerTarget === '5'
-                  ? 'font-semibold text-white'
-                  : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
-              }`}
-              style={
-                steerTarget === '5'
-                  ? { background: STAR5, borderColor: STAR5_BORDER }
-                  : undefined
-              }
-            >
-              ★★★★★ 5-star
-            </button>
-            <button
-              type="button"
               onClick={() => onSteerChange('1')}
               disabled={!star1Ready}
               title={!star1Ready ? 'Add STEPS_1STAR for the full 1★ walkthrough' : 'Steer toward 1★ reviews'}
@@ -1365,6 +1349,22 @@ export default function CATDemo() {
               }
             >
               ★☆☆☆☆ 1-star
+            </button>
+            <button
+              type="button"
+              onClick={() => onSteerChange('5')}
+              className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
+                steerTarget === '5'
+                  ? 'font-semibold text-white'
+                  : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
+              }`}
+              style={
+                steerTarget === '5'
+                  ? { background: STAR5, borderColor: STAR5_BORDER }
+                  : undefined
+              }
+            >
+              ★★★★★ 5-star
             </button>
             <button
               type="button"
@@ -1387,7 +1387,7 @@ export default function CATDemo() {
           )}
           {controlMethod == null ? (
             <p className="mt-2 text-sm text-gray-600">
-              Choose 5★, 1★, or no steering to explore next-token probabilities.
+              Choose 1★, 5★, or no steering to explore next-token and attribute probabilities.
             </p>
           ) : controlMethod === 'none' ? (
             <p className="mt-2 text-sm text-gray-600">
