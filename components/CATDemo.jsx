@@ -1475,7 +1475,7 @@ export default function CATDemo() {
 
           <div className="mt-6 pt-6 border-t border-gray-300">
             <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm text-gray-900 text-xs sm:text-sm leading-relaxed space-y-3">
-              <h2 className="text-sm font-semibold text-gray-900">How to Use</h2>
+              <div className="text-xs text-gray-900 uppercase tracking-widest mb-3 font-semibold">How to use</div>
               <p>
                 The demo below shows how Conditional Attribute Transformers steer a language model toward 1★ or 5★ reviews and sample from next-token and attribute distributions. This is not a live demo — it uses precomputed trajectories you can step through.
               </p>
