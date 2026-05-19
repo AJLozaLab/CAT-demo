@@ -70,6 +70,67 @@ function tokenFromFilename(csvFile, starKey, promptPrefix) {
   return { chosenToken, context }
 }
 
+function listStepCsvFiles(dir) {
+  return fs
+    .readdirSync(dir)
+    .filter(f => f.endsWith('.csv') && f !== 'summary.csv' && !f.includes('.ipynb_checkpoints'))
+}
+
+/** Resolve summary csv name to an on-disk file (handles phones vs appliances prefix drift). */
+function resolveCsvPath(dir, csvFile, starKey, token) {
+  const exact = path.join(dir, csvFile)
+  if (fs.existsSync(exact)) return exact
+
+  const marker = `_${starKey}_`
+  const files = listStepCsvFiles(dir)
+  const norm = t => t.trim()
+  const target = norm(token)
+
+  const byToken = files.filter(f => {
+    const base = f.replace(/\.csv$/i, '')
+    const idx = base.lastIndexOf(marker)
+    if (idx === -1) return false
+    const fileToken = base.slice(idx + marker.length)
+    return fileToken === token || norm(fileToken) === target
+  })
+
+  if (byToken.length === 1) return path.join(dir, byToken[0])
+
+  if (byToken.length > 1) {
+    const summaryBase = csvFile.replace(/\.csv$/i, '')
+    const summaryIdx = summaryBase.lastIndexOf(marker)
+    const summarySuffix = summaryIdx === -1 ? '' : summaryBase.slice(summaryIdx)
+    const suffixMatch = byToken.find(f => f.replace(/\.csv$/i, '').endsWith(summarySuffix))
+    if (suffixMatch) return path.join(dir, suffixMatch)
+
+    let bestPath = path.join(dir, byToken[0])
+    let bestProb = -1
+    for (const f of byToken) {
+      const row = pickChosenRow(readStepTable(path.join(dir, f)), token)
+      if (row && row.prob > bestProb) {
+        bestProb = row.prob
+        bestPath = path.join(dir, f)
+      }
+    }
+    return bestPath
+  }
+
+  return null
+}
+
+const normToken = t => t.trim()
+
+/** Among exact/trim-equivalent token rows, pick the one with highest next-token prob. */
+function pickChosenRow(table, chosenToken) {
+  if (!table?.length || chosenToken == null) return null
+  const target = normToken(chosenToken)
+  const candidates = table.filter(
+    r => r.token === chosenToken || normToken(r.token) === target
+  )
+  if (!candidates.length) return null
+  return candidates.reduce((best, row) => (row.prob > best.prob ? row : best))
+}
+
 function readStepTable(csvPath) {
   const text = fs.readFileSync(csvPath, 'utf8')
   const lines = text.trim().split(/\r?\n/)
@@ -95,8 +156,6 @@ function readStepTable(csvPath) {
 
 function trimTableForDemo(table, chosenToken, topK = TABLE_TOP_K) {
   if (!table.length) return table
-  const norm = t => t.trim()
-  const target = norm(chosenToken)
   const byProb = [...table].sort((a, b) => b.prob - a.prob)
   const kept = []
   const seen = new Set()
@@ -106,9 +165,7 @@ function trimTableForDemo(table, chosenToken, topK = TABLE_TOP_K) {
     seen.add(row.token)
     kept.push(row)
   }
-  const chosenRow =
-    table.find(r => r.token === chosenToken) ||
-    table.find(r => norm(r.token) === target)
+  const chosenRow = pickChosenRow(table, chosenToken)
   if (chosenRow && !seen.has(chosenRow.token)) kept.push(chosenRow)
   return kept.sort((a, b) => b.prob - a.prob)
 }
@@ -125,18 +182,17 @@ function buildSteps(dir, starKey) {
   const summary = readSummary(dir, starKey)
   const steps = []
   for (const row of summary) {
-    const csvPath = path.join(dir, row.csvFile)
-    if (!fs.existsSync(csvPath)) {
-      console.warn('Missing:', csvPath)
+    const csvPath = resolveCsvPath(dir, row.csvFile, starKey, row.token)
+    if (!csvPath) {
+      console.warn('Missing:', path.join(dir, row.csvFile))
       continue
     }
-    const { chosenToken, context } = tokenFromFilename(row.csvFile, starKey, promptPrefix)
+    if (path.basename(csvPath) !== row.csvFile) {
+      console.log(`  resolved ${row.csvFile} → ${path.basename(csvPath)}`)
+    }
+    const { chosenToken, context } = tokenFromFilename(path.basename(csvPath), starKey, promptPrefix)
     const fullTable = readStepTable(csvPath)
-    const norm = t => t.trim()
-    const chosenRow =
-      fullTable.find(r => r.token === chosenToken) ||
-      fullTable.find(r => norm(r.token) === norm(chosenToken)) ||
-      fullTable[0]
+    const chosenRow = pickChosenRow(fullTable, chosenToken) ?? fullTable[0]
     if (!chosenRow) continue
     const chosen_token = chosenRow.token
     const table = trimTableForDemo(fullTable, chosen_token)
@@ -180,13 +236,17 @@ const steer5 = buildSteps(path.join(root, 'tempdata/steer_to_5'), '5')
 const steer1 = buildSteps(path.join(root, 'tempdata/steer_to_1'), '1')
 const steer5then1 = buildSteps(path.join(root, 'tempdata/steer_to_5_then_1'), '5_then_1')
 const steer1then5 = buildSteps(path.join(root, 'tempdata/steer_to_1_then_5'), '1_then_5')
-const noSteering = buildSteps(path.join(root, 'tempdata/no_steering'), '5_then_1')
-const branchFrom5Index = findBranchIndex(steer5, steer5then1)
-const branchFrom1Index = findBranchIndex(steer1, steer1then5)
 const promptFrom5 = steer5.filter(s => s.prompt_only)
 const promptFrom1 = steer1.filter(s => s.prompt_only)
 const promptSteps = promptFrom1.length >= promptFrom5.length ? promptFrom1 : promptFrom5
 if (promptSteps.length) promptSteps[0].fixed_prompt_display = DEMO_PROMPT
+
+const noSteeringBody = buildSteps(path.join(root, 'tempdata/no_steering'), '5_then_1')
+const noSteering = [...promptSteps, ...noSteeringBody]
+if (noSteering.length) noSteering[0].fixed_prompt_display = DEMO_PROMPT
+
+const branchFrom5Index = findBranchIndex(steer5, steer5then1)
+const branchFrom1Index = findBranchIndex(steer1, steer1then5)
 
 const out = `/** Generated by scripts/build-steps-data.mjs from tempdata/ */\n\n${emitSteps('PROMPT_STEPS', promptSteps)}${emitSteps('STEPS_5STAR', steer5)}${emitSteps('STEPS_1STAR', steer1)}${emitSteps('STEPS_5_THEN_1', steer5then1)}${emitSteps('STEPS_1_THEN_5', steer1then5)}${emitSteps('STEPS_NO_STEERING', noSteering)}export const STEPS = STEPS_5STAR;\n\n/** Step index where 5★ main path meets the steer_to_5_then_1 overlap (e.g. "but"). */\nexport const BRANCH_FROM_5_INDEX = ${branchFrom5Index};\n\n/** Step index where 1★ main path meets the steer_to_1_then_5 overlap (e.g. "at"). */\nexport const BRANCH_FROM_1_INDEX = ${branchFrom1Index};\n\n/** Labels for prompt-only steps (I, really) on the chart. */\nexport const CHART_PREFIX_LABELS = ${JSON.stringify(CHART_PREFIX_LABELS)};\n\n/** Shown in grey before steered decode; generation is appended after this. Override with \`fixed_prompt_display\` on \`steps[0]\`. */\nexport const FIXED_STEER_PROMPT_DISPLAY = '${DEMO_PROMPT}';\n\nexport function getFixedSteerPromptDisplay(steps) {\n  if (steps?.length && typeof steps[0].fixed_prompt_display === 'string')\n    return steps[0].fixed_prompt_display;\n  return FIXED_STEER_PROMPT_DISPLAY;\n}\n\nexport function countPromptOnlySteps(steps) {\n  if (!steps?.length) return 0;\n  let n = 0;\n  for (const s of steps) {\n    if (s.prompt_only) n++;\n    else break;\n  }\n  return n;\n}\n\nexport function mergeTraceAtBranch(mainSteps, branchSteps, branchIndex) {\n  return [...mainSteps.slice(0, branchIndex), ...branchSteps.slice(branchIndex)];\n}\n`
 

@@ -275,21 +275,13 @@ const REGION_LABEL_LINE_HEIGHT = 12
 const REGION_LABEL_MIN_GAP = 8
 /** Fixed token slots for label centering at the left edge of a region (labels do not shift on reveal). */
 const REGION_LABEL_MAX_TOKENS = 5
-const CHART_LABEL_TOP_PAD_PROMPT_ONLY = 28
-const CHART_LABEL_TOP_PAD_SINGLE_STEER = 40
-const CHART_LABEL_TOP_PAD_BRANCH = 72
+/** Fixed plot band height; total canvas height = this + chartRegionLabelTopPad(...). */
+const CHART_PLOT_HEIGHT = 200
+const REGION_LABEL_BASE_MARGIN = 12
 
 function chartRegionLabelTopPad(cfg = {}) {
-  if (cfg.preSteer || (cfg.promptEndIndex ?? 0) <= 0) return CHART_LABEL_TOP_PAD_PROMPT_ONLY
-  if (
-    cfg.branchTaken &&
-    cfg.branchIndex != null &&
-    cfg.branchIndex > (cfg.promptEndIndex ?? 0) &&
-    cfg.steerTarget
-  ) {
-    return CHART_LABEL_TOP_PAD_BRANCH
-  }
-  return CHART_LABEL_TOP_PAD_SINGLE_STEER
+  const labelBlock = 3 * REGION_LABEL_LINE_HEIGHT + REGION_LABEL_BASE_MARGIN
+  return labelBlock
 }
 
 const GUIDE_LABEL_FONT = '600 10px var(--font-sans), Inter, system-ui, sans-serif'
@@ -369,7 +361,7 @@ function drawSteerRegionGuides(chart, cfg) {
     labelPlans.push({ text: 'Prompt', range: promptLabelRange, color: '#6b7280' })
   }
 
-  if (cfg.preSteer || cfg.promptEndIndex <= 0) {
+  if (cfg.preSteer || cfg.promptEndIndex <= 0 || cfg.noSteering) {
     layoutRegionLabels(ctx, labelPlans, chartArea)
     return
   }
@@ -439,7 +431,7 @@ function registerSteerChartPlugin(Chart) {
         fillChartRect(ctx, promptRange.left, top, promptRange.right, bottom, chartArea)
         ctx.restore()
       }
-      if (cfg.preSteer || cfg.promptEndIndex <= 0) return
+      if (cfg.preSteer || cfg.promptEndIndex <= 0 || cfg.noSteering) return
       const firstSteerTarget = cfg.firstSteerTarget ?? cfg.steerTarget
       if (
         cfg.branchTaken &&
@@ -528,6 +520,7 @@ function applyChartStep(
     promptEndIndex = 0,
     prefixSnapshot = null,
     firstSteerTarget = null,
+    noSteering = false,
   } = {}
 ) {
   const capacity = Math.max(slotCount, stepList.length)
@@ -600,6 +593,7 @@ function applyChartStep(
   chart.options.plugins.steerRegions = {
     enabled: true,
     preSteer,
+    noSteering,
     promptEndIndex,
     steerTarget,
     branchTaken,
@@ -695,9 +689,11 @@ export default function CATDemo() {
       : pathForBranch === '1'
         ? BRANCH_FROM_1_INDEX
         : null
+  const isNoSteering = controlMethod === 'none'
   const chartApplyOpts = useMemo(
     () => ({
       preSteer: isPreSteer,
+      noSteering: isNoSteering,
       steerTarget,
       branchTaken,
       branchFromTarget,
@@ -708,6 +704,7 @@ export default function CATDemo() {
     }),
     [
       isPreSteer,
+      isNoSteering,
       steerTarget,
       branchTaken,
       branchFromTarget,
@@ -728,6 +725,18 @@ export default function CATDemo() {
     []
   )
   const chartMinWidth = Math.max(560, chartSlotCount * 44)
+  const chartTopPad = useMemo(
+    () =>
+      chartRegionLabelTopPad({
+        preSteer: isPreSteer,
+        promptEndIndex: chartPromptEndIndex,
+        steerTarget,
+        branchTaken,
+        branchIndex: chartBranchIndex,
+      }),
+    [isPreSteer, chartPromptEndIndex, steerTarget, branchTaken, chartBranchIndex]
+  )
+  const chartTotalHeight = CHART_PLOT_HEIGHT + chartTopPad
 
   const fixedPrompt = useMemo(() => getFixedSteerPromptDisplay(steps), [steps])
   const { fixedPromptTrimmed, fixedPromptTrailing } = useMemo(() => {
@@ -905,7 +914,7 @@ export default function CATDemo() {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
-            layout: { padding: { top: CHART_LABEL_TOP_PAD_SINGLE_STEER } },
+            layout: { padding: { top: chartTopPad } },
             scales: {
               x: {
                 ticks: {
@@ -952,7 +961,7 @@ export default function CATDemo() {
       chart?.destroy()
       if (chartRef.current === chart) chartRef.current = null
     }
-  }, [vizActive, hasSteps, steps, chartSlotCount])
+  }, [vizActive, hasSteps, steps, chartSlotCount, chartTopPad])
 
   // ── Update chart when step / steer mode changes ──────────────────────────────
   useEffect(() => {
@@ -1525,7 +1534,7 @@ export default function CATDemo() {
                 </span>
               </div>
             </div>
-            <div className="relative h-[220px] overflow-x-auto">
+            <div className="relative overflow-x-auto" style={{ height: chartTotalHeight }}>
               <div className="h-full" style={{ minWidth: chartMinWidth }}>
                 <canvas ref={canvasRef} />
               </div>
