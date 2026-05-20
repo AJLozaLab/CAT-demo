@@ -59,15 +59,26 @@ function isPromptOnlyRow(row) {
   return row.explanation === '' && CHART_PREFIX_LABELS.includes(row.token)
 }
 
+const STAR_MARKERS = ['5_then_1', '1_then_5', '5', '1']
+
+function normalizeChosenTokenFromFilename(token) {
+  if (/^\.+$/.test(token)) return '.'
+  return token
+}
+
 function tokenFromFilename(csvFile, starKey, promptPrefix) {
   const base = csvFile.replace(/\.csv$/i, '')
-  const marker = `_${starKey}_`
-  const idx = base.lastIndexOf(marker)
-  if (idx === -1) return { chosenToken: '', context: '' }
-  const chosenToken = base.slice(idx + marker.length)
-  let context = base.slice(0, idx)
-  if (context.startsWith(promptPrefix)) context = context.slice(promptPrefix.length)
-  return { chosenToken, context }
+  const keys = [starKey, ...STAR_MARKERS.filter(k => k !== starKey)]
+  for (const key of keys) {
+    const marker = `_${key}_`
+    const idx = base.lastIndexOf(marker)
+    if (idx === -1) continue
+    const chosenToken = normalizeChosenTokenFromFilename(base.slice(idx + marker.length))
+    let context = base.slice(0, idx)
+    if (context.startsWith(promptPrefix)) context = context.slice(promptPrefix.length)
+    return { chosenToken, context, markerKey: key }
+  }
+  return { chosenToken: '', context: '', markerKey: starKey }
 }
 
 function listStepCsvFiles(dir) {
@@ -206,11 +217,13 @@ function buildSteps(dir, starKey) {
     if (path.basename(csvPath) !== row.csvFile) {
       console.log(`  resolved ${row.csvFile} → ${path.basename(csvPath)}`)
     }
-    const { chosenToken, context } = tokenFromFilename(path.basename(csvPath), starKey, promptPrefix)
+    let { chosenToken, context } = tokenFromFilename(path.basename(csvPath), starKey, promptPrefix)
+    if (!chosenToken.trim()) chosenToken = row.token
     const fullTable = readStepTable(csvPath)
     const chosenRow = pickChosenRow(fullTable, chosenToken) ?? fullTable[0]
     if (!chosenRow) continue
-    const chosen_token = chosenRow.token
+    let chosen_token = chosenRow.token
+    if (/^\.+$/.test(chosen_token.trim())) chosen_token = '.'
     const table = trimTableForDemo(fullTable, chosen_token)
     const promptOnly = isPromptOnlyRow(row)
     if (fullTable.length > table.length) {
@@ -334,7 +347,9 @@ const promptFrom1 = steer1.filter(s => s.prompt_only)
 const promptSteps = promptFrom1.length >= promptFrom5.length ? promptFrom1 : promptFrom5
 if (promptSteps.length) promptSteps[0].fixed_prompt_display = DEMO_PROMPT
 
-const noSteeringBody = buildSteps(path.join(root, 'tempdata/no_steering'), '5_then_1')
+const noSteeringBody = buildSteps(path.join(root, 'tempdata/no_steering'), '5_then_1').filter(
+  s => s.prompt_only || (s.chosen_token || '').trim()
+)
 const noSteering = [...promptSteps, ...noSteeringBody]
 if (noSteering.length) noSteering[0].fixed_prompt_display = DEMO_PROMPT
 
