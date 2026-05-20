@@ -11,8 +11,6 @@ import {
   PROMPT_STEPS,
   BRANCH_FROM_5_INDEX,
   BRANCH_FROM_1_INDEX,
-  BRANCH_SWITCH_FROM_5_INDEX,
-  BRANCH_SWITCH_FROM_1_INDEX,
   getFixedSteerPromptDisplay,
   countPromptOnlySteps,
   mergeTraceAtBranch,
@@ -39,6 +37,11 @@ const TABLE_TOP_K = 20
 const DEFAULT_TOKEN_REVEAL_MS = 1000
 
 const EMPTY_TRACE = []
+
+const NO_STEER_READY = STEPS_NO_STEERING.length > 0
+const DEFAULT_NO_STEER_STEP = NO_STEER_READY
+  ? countPromptOnlySteps(STEPS_NO_STEERING)
+  : 0
 
 const PROMPT_CHART_GREY = '#9ca3af'
 const PROMPT_CHART_GREY_DARK = '#6b7280'
@@ -553,10 +556,10 @@ function starLabel(target) {
   return target === '5' ? '5-Star' : '1-Star'
 }
 
-/** Default table sort: ascending on the attribute being steered toward. */
+/** Default table sort: descending on the steered attribute (highest prob first). */
 function defaultTableSort(steerTarget) {
-  if (steerTarget === '5') return { col: 'star5', dir: 'asc' }
-  if (steerTarget === '1') return { col: 'star1', dir: 'asc' }
+  if (steerTarget === '5') return { col: 'star5', dir: 'desc' }
+  if (steerTarget === '1') return { col: 'star1', dir: 'desc' }
   return { col: 'prob', dir: 'desc' }
 }
 
@@ -719,9 +722,9 @@ function applyChartStep(
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function CATDemo() {
-  const [controlMethod, setControlMethod] = useState(null) // null | '5' | '1' | 'none'
+  const [controlMethod, setControlMethod] = useState(NO_STEER_READY ? 'none' : null) // null | '5' | '1' | 'none'
   const [steerTarget, setSteerTarget] = useState(null) // null until 5★ or 1★ is chosen
-  const [activeTrace, setActiveTrace] = useState(null)
+  const [activeTrace, setActiveTrace] = useState(NO_STEER_READY ? STEPS_NO_STEERING : null)
   const [branchTaken, setBranchTaken] = useState(false)
   const [branchFromTarget, setBranchFromTarget] = useState(null) // original path before branch switch
   const [firstSteerTarget, setFirstSteerTarget] = useState(null) // locked when 5★/1★ is first chosen
@@ -729,7 +732,7 @@ export default function CATDemo() {
   const [introStage, setIntroStage]   = useState('pre') // 'pre' | 'prefix' | 'live'
   const [playTokenCount, setPlayTokenCount] = useState(0)
   const [playPaused, setPlayPaused] = useState(false)
-  const [currentStep, setCurrentStep] = useState(0)
+  const [currentStep, setCurrentStep] = useState(DEFAULT_NO_STEER_STEP)
   const [sortCol, setSortCol]         = useState('prob')
   const [sortDir, setSortDir]         = useState('desc')
   const [tokenRevealMs, setTokenRevealMs] = useState(DEFAULT_TOKEN_REVEAL_MS)
@@ -885,7 +888,7 @@ export default function CATDemo() {
   const initialSteerPlayCount = (_stepList, stepIndex) =>
     playCountForStepIndex(stepIndex)
 
-  const resetIntro = useCallback(() => {
+  const clearPlaybackTimers = () => {
     prefixRunIdRef.current += 1
     if (prefixTimerRef.current) {
       clearInterval(prefixTimerRef.current)
@@ -893,6 +896,29 @@ export default function CATDemo() {
     }
     for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
     prefixTimeoutsRef.current = []
+  }
+
+  const applyNoSteerPath = useCallback(() => {
+    if (!NO_STEER_READY) return false
+    clearPlaybackTimers()
+    const steerStart = countPromptOnlySteps(STEPS_NO_STEERING)
+    setControlMethod('none')
+    setSteerTarget(null)
+    setFirstSteerTarget(null)
+    setActiveTrace(STEPS_NO_STEERING)
+    setBranchTaken(false)
+    setBranchFromTarget(null)
+    setChartPrefixSnapshot(null)
+    setIntroStage('pre')
+    setCurrentStep(steerStart)
+    setPlayTokenCount(0)
+    setPlayPaused(false)
+    return true
+  }, [])
+
+  const resetIntro = useCallback(() => {
+    if (applyNoSteerPath()) return
+    clearPlaybackTimers()
     setControlMethod(null)
     setSteerTarget(null)
     setActiveTrace(null)
@@ -904,17 +930,7 @@ export default function CATDemo() {
     setPlayTokenCount(0)
     setPlayPaused(false)
     setCurrentStep(0)
-  }, [])
-
-  const clearPlaybackTimers = () => {
-    prefixRunIdRef.current += 1
-    if (prefixTimerRef.current) {
-      clearInterval(prefixTimerRef.current)
-      prefixTimerRef.current = null
-    }
-    for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
-    prefixTimeoutsRef.current = []
-  }
+  }, [applyNoSteerPath])
 
   const onSteerChange = next => {
     clearPlaybackTimers()
@@ -935,20 +951,7 @@ export default function CATDemo() {
 
   const onNoSteerChange = () => {
     if (!noSteerReady) return
-    clearPlaybackTimers()
-    const targetSteps = STEPS_NO_STEERING
-    const steerStart = countPromptOnlySteps(targetSteps)
-    setControlMethod('none')
-    setSteerTarget(null)
-    setFirstSteerTarget(null)
-    setActiveTrace(targetSteps)
-    setBranchTaken(false)
-    setBranchFromTarget(null)
-    setChartPrefixSnapshot(null)
-    setIntroStage('pre')
-    setCurrentStep(steerStart)
-    setPlayTokenCount(0)
-    setPlayPaused(false)
+    applyNoSteerPath()
   }
 
   const branchIndexForTarget = target =>
@@ -1002,18 +1005,29 @@ export default function CATDemo() {
     for (const tid of prefixTimeoutsRef.current) clearTimeout(tid)
     prefixTimeoutsRef.current = []
     const step = currentStepRef.current
-    const branchIdx = steerTarget === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
-    setChartPrefixSnapshot(buildChartPrefixSnapshot(stepsRef.current, branchIdx))
-    if (steerTarget === '5') {
+
+    if (branchTaken && branchFromTarget) {
+      setActiveTrace(branchFromTarget === '5' ? STEPS_5STAR : STEPS_1STAR)
+      setSteerTarget(branchFromTarget)
+      setBranchTaken(false)
+      setBranchFromTarget(null)
+      setChartPrefixSnapshot(null)
+    } else if (steerTarget === '5') {
+      const branchIdx = BRANCH_FROM_5_INDEX
+      setChartPrefixSnapshot(buildChartPrefixSnapshot(stepsRef.current, branchIdx))
       setBranchFromTarget('5')
       setActiveTrace(mergeTraceAtBranch(STEPS_5STAR, STEPS_5_THEN_1, branchIdx))
       setSteerTarget('1')
+      setBranchTaken(true)
     } else if (steerTarget === '1') {
+      const branchIdx = BRANCH_FROM_1_INDEX
+      setChartPrefixSnapshot(buildChartPrefixSnapshot(stepsRef.current, branchIdx))
       setBranchFromTarget('1')
       setActiveTrace(mergeTraceAtBranch(STEPS_1STAR, STEPS_1_THEN_5, branchIdx))
       setSteerTarget('5')
+      setBranchTaken(true)
     }
-    setBranchTaken(true)
+
     setCurrentStep(step)
     setPlayTokenCount(playCountForStepIndex(step))
     setIntroStage('pre')
@@ -1182,7 +1196,7 @@ export default function CATDemo() {
   const tryPauseAtBranchPoint = useCallback((runId, count) => {
     const steer = steerTargetRef.current
     if (!steer || branchTakenRef.current) return false
-    const switchIdx = steer === '5' ? BRANCH_SWITCH_FROM_5_INDEX : BRANCH_SWITCH_FROM_1_INDEX
+    const switchIdx = steer === '5' ? BRANCH_FROM_5_INDEX : BRANCH_FROM_1_INDEX
     const hasBranch = steer === '5' ? STEPS_5_THEN_1.length > 0 : STEPS_1_THEN_5.length > 0
     if (!hasBranch || switchIdx == null || count !== switchIdx + 1) return false
     if (runId !== prefixRunIdRef.current) return true
@@ -1430,19 +1444,30 @@ export default function CATDemo() {
       : pathForBranch === '1'
         ? STEPS_1_THEN_5.length > 0
         : false
-  const branchSwitchStep =
-    pathForBranch === '5'
-      ? BRANCH_SWITCH_FROM_5_INDEX
-      : pathForBranch === '1'
-        ? BRANCH_SWITCH_FROM_1_INDEX
+  /** Original steer lineage (5★ or 1★) — fork is always on that path's BRANCH_FROM index. */
+  const branchLineage =
+    branchTaken && branchFromTarget ? branchFromTarget : steerTarget
+  const branchForkStep =
+    branchLineage === '5'
+      ? BRANCH_FROM_5_INDEX
+      : branchLineage === '1'
+        ? BRANCH_FROM_1_INDEX
         : null
+  const branchToggleTarget =
+    branchTaken && branchFromTarget
+      ? branchFromTarget
+      : steerTarget === '5'
+        ? '1'
+        : steerTarget === '1'
+          ? '5'
+          : null
   const showBranchSwitch =
     !isPreSteer &&
-    !branchTaken &&
     branchReady &&
-    branchSwitchStep != null &&
-    vizStepIndex === branchSwitchStep &&
-    !steps[vizStepIndex]?.prompt_only
+    branchForkStep != null &&
+    vizStepIndex === branchForkStep &&
+    !steps[vizStepIndex]?.prompt_only &&
+    branchToggleTarget != null
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -1611,11 +1636,11 @@ export default function CATDemo() {
                     onClick={onBranchSwitch}
                     className="absolute right-full top-1/2 z-10 mr-2 -translate-y-1/2 whitespace-nowrap px-4 py-1.5 rounded-md text-sm font-semibold text-white shadow-sm transition-colors"
                     style={{
-                      background: steerTarget === '5' ? STAR1 : STAR5,
-                      border: `1px solid ${steerTarget === '5' ? STAR1_BORDER : STAR5_BORDER}`,
+                      background: branchToggleTarget === '1' ? STAR1 : STAR5,
+                      border: `1px solid ${branchToggleTarget === '1' ? STAR1_BORDER : STAR5_BORDER}`,
                     }}
                   >
-                    Steer back toward {steerTarget === '5' ? starLabel('1') : starLabel('5')}
+                    Steer back toward {starLabel(branchToggleTarget)}
                   </button>
                 )}
                 <button
