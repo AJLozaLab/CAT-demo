@@ -928,7 +928,7 @@ export default function CATDemo() {
     setBranchFromTarget(null)
     setChartPrefixSnapshot(null)
     setIntroStage('pre')
-    setCurrentStep(Math.max(0, steerStart - 1))
+    setCurrentStep(steerStart)
     setPlayTokenCount(0)
     setPlayPaused(false)
   }
@@ -946,7 +946,7 @@ export default function CATDemo() {
     setBranchFromTarget(null)
     setChartPrefixSnapshot(null)
     setIntroStage('pre')
-    setCurrentStep(Math.max(0, steerStart - 1))
+    setCurrentStep(steerStart)
     setPlayTokenCount(0)
     setPlayPaused(false)
   }
@@ -986,7 +986,7 @@ export default function CATDemo() {
       return
     }
     setCurrentStep(s => {
-      const minStep = Math.max(0, countPromptOnlySteps(stepsRef.current) - 1)
+      const minStep = countPromptOnlySteps(stepsRef.current)
       const next = Math.max(minStep, s - 1)
       if (branchIdx != null && next < branchIdx) revertBranch()
       return next
@@ -1153,7 +1153,7 @@ export default function CATDemo() {
         if (e.key === 'ArrowRight') setCurrentStep(s => Math.min(s + 1, steps.length - 1))
         if (e.key === 'ArrowLeft') setCurrentStep(s => Math.max(s - 1, 0))
       } else if (!isPreSteer && !live && !isPlayingAnim) {
-        const min = Math.max(0, countPromptOnlySteps(steps) - 1)
+        const min = countPromptOnlySteps(steps)
         if (e.key === 'ArrowRight') {
           if (isPausedAnim) {
             setPlayTokenCount(c => {
@@ -1418,7 +1418,7 @@ export default function CATDemo() {
       ? currentStep > 0
       : isPausedAnim
         ? playTokenCount > 0
-        : currentStep > Math.max(0, steerStart - 1))
+        : currentStep > steerStart)
   const steerAccent =
     steerTarget === '1' ? STAR1 : steerTarget === '5' ? STAR5 : '#6b7280'
   const steerAccentBorder =
